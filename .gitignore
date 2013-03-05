@@ -11,3 +11,10 @@
 *.lai
 *.la
 *.a
+
+# Arduino
+
+
+# VIM
+.*.swp
+.*.swo
