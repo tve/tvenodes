@@ -13,7 +13,7 @@
 *.a
 
 # Arduino
-
+*.dep
 
 # VIM
 .*.swp
