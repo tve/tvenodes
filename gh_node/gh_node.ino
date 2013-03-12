@@ -36,18 +36,6 @@ int limit_fan  = 80;  // when to turn fan on in F
 // Testing override
 float force_air = NAN;      // used to force air temp for testing
 
-//===== Servo =====
-
-SlowServo servo(SERVO_PORT+3, 450, 1800);
-
-void initServo() {
-#if ENABLE_SERVO
-  servo.attach(1500); // need to save last position!
-#else
-  Serial.println("Servo disabled");
-#endif
-}
-
 //===== Heater relay =====
 
 // The heater relay is driven using an open-collector style output where low=ON and
@@ -98,13 +86,32 @@ MilliTimer fanPrint;
 void setFan() {
   boolean on = fanForce == 2 || (!fanForce && fanAuto);
   fanRelay.mode2(on ? OUTPUT : INPUT);
-#if ENABLE_SERVO
-  servo.write(on ? SERVO_OPEN : SERVO_CLOSED);
-#endif
   //if (fanPrint.poll(60000)) {
   //  Serial.print("Fan is ");
   //  Serial.println(on ? "ON" : "OFF");
   //}
+}
+
+//===== Servo =====
+
+int8_t servoAuto = 0;    // automatic says: 0=off, 1=on
+
+SlowServo servo(SERVO_PORT+3, 450, 1800);
+
+void initServo() {
+#if ENABLE_SERVO
+  servo.attach(1500); // need to save last position!
+#else
+  Serial.println("Servo disabled");
+#endif
+}
+
+void setServo() {
+  // the servo is coupled to the fanForce
+  boolean on = fanForce == 2 || (!fanForce && servoAuto);
+#if ENABLE_SERVO
+  servo.write(on ? SERVO_OPEN : SERVO_CLOSED);
+#endif
 }
 
 //===== Temperature Sensors =====
@@ -529,6 +536,16 @@ void loop() {
     fanAuto    = !isnan(temp_now[T_AIR]) && temp_now[T_AIR] > limit_fan+1;
   if (oldFanAuto != fanAuto) Serial.println(fanAuto ? "Fan off->ON" : "Fan on->OFF");
 
+  // Shutter servo work in conjunction with fan, but turns on 2 degrees lower
+  bool oldServoAuto = servoAuto;
+  if (fanAuto)
+    servoAuto = true;
+  else if (servoAuto)
+    servoAuto  = !isnan(temp_now[T_AIR]) && temp_now[T_AIR] > limit_fan-3;
+  else
+    servoAuto  = !isnan(temp_now[T_AIR]) && temp_now[T_AIR] > limit_fan+1;
+  if (oldServoAuto != servoAuto) Serial.println(servoAuto ? "Servo off->ON" : "Servo on->OFF");
+
   // Heater temp control with 2 degree hysteresis
   bool oldHeaterAuto = heaterAuto;
   if (heaterAuto)
@@ -539,6 +556,7 @@ void loop() {
 
   setHeater();
   setFan();
+  setServo();
 #if ENABLE_SERVO
   servo.loop();
 #endif
