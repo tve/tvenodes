@@ -12,6 +12,7 @@
 #include <OwTemp.h>
 #include <SlowServo.h>
 
+
 #define HEATER_PORT 1  // A pin
 #define ONEW_PORT   1  // D pin
 #define FAN_PORT    2  // A pin
@@ -527,6 +528,9 @@ void loop() {
   // override air temp for testing
   if (!isnan(force_air)) temp_now[T_AIR]  = force_air;
   showTemp();
+
+  // send & receive rf12 packets
+  //pollPacket();
 
   // Fan temp control with 2 degree hysteresis
   bool oldFanAuto = fanAuto;

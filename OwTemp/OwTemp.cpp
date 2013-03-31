@@ -40,7 +40,7 @@ byte OwTemp::setup(byte num, uint64_t *addrs) {
     for (byte s=0; s<temp_count; s++) {
       if (addr == temp_addr[s]) {
         // yup! we know this one
-        if (s < num) found |= (uint16_t)s << s;  // mark sensor as found
+        if (s < num) found |= (uint16_t)1 << s;  // mark sensor as found
         goto cont;
       }
     }
@@ -70,9 +70,10 @@ byte OwTemp::setup(byte num, uint64_t *addrs) {
   }
 
   // print info about missing sensors
-  if (found != (1<<num)-1) {
+  if (found != (uint16_t)(1<<num)-1) {
      Serial.print("Missing sensors:");
-     //Serial.print(" ("); Serial.print(found, HEX); Serial.print(") ");
+     //Serial.print(" ("); Serial.print(found, HEX); Serial.print("/");
+		 //Serial.print(num); Serial.print(") ");
      for (byte s=0; s<num; s++) {
        if (!(found & (1<<s))) {
          Serial.print(" ");

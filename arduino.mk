@@ -357,7 +357,7 @@ $(TARGET).elf: $(ARDUINOLIB) $(OBJECTS)
 
 %.o: %.ino
 	mkdir -p .dep/$(dir $<)
-	$(COMPILE.cpp) $(CPPDEPFLAGS) -o $@ $(CPPINOFLAGS) $< 2>&1 | egrep -v 'ignoring packed attribute'
+	$(COMPILE.cpp) $(CPPDEPFLAGS) -o $@ $(CPPINOFLAGS) $< # 2>&1 | egrep -v 'ignoring packed attribute'
 
 %.o: %.pde
 	mkdir -p .dep/$(dir $<)
