@@ -1,143 +1,199 @@
-// C 2013 Thorsten von Eicken
-
-// rf12 Network Packets and handling
+// Copyright (c) 2013 Thorsten von Eicken
 //
-// rf12 header:
+// TODO: combine ACKs with responses for packet types that send an immediate response
+// TODO: get initial node_id and config CRC from EEPROM
+
+// Reminder: rf12 header (per JeeLib rf12.cpp)
 // DST=0: broadcast from named node
 // DST=1: unicast to named node
 // CTL=0, ACK=0: normal packet, no ack requested
 // CTL=0, ACK=1: normal packet, ack requested
 // CTL=1, ACK=0: ack packet
 // CTL=1, ACK=1: unused
+// node 0: reserved for OOK
+// node 31: reserved for receive-all-packets
 
 #include <JeeLib.h>
+#include <Config.h>
 #include <Net.h>
 #include <Time.h>
 
+// Special node IDs
+#define NET_GW_NODE      1  // gateway to the IP network
+#define NET_UNINIT_NODE 30  // uninitialized node
+
+// Packet buffers and retries
 #define NET_RETRY_MS 100
-#define NET_RETRY_MAX 8
-#define NET_PKT        2                // size of packet buffer
+#define NET_RETRY_MAX  8
 
-static net_packet net_buf[NET_PKT];     // buffer for outgoing packets
-static uint8_t net_len[NET_PKT];        // data length of packets in net_buf
-static uint8_t net_bufsz = 0;           // number of outgoing packets in buffer
-static uint8_t net_sendCnt = 0;         // number of transmissions of last packet
-static uint32_t net_sendTime = 0;       // when last packet was sent (for retries)
-uint8_t net_nodeId = -1;                // local node id
-static uint8_t net_queuedAck = 0;       // header of queued ACK
+// Predicate to tell whether the node is initialized (an init packet has been received)
+#define INITED (init_id < 0x80)
 
-// Initialize rf12 communication
-void net_setup(uint8_t id, bool lowPower) {
-  net_nodeId = id;
-  rf12_initialize(id, RF12_915MHZ);
-  if (lowPower) {
-    Serial.println("Net: reducing tx power and rx gain");
-    rf12_control(0x9857); // reduce tx power
-    rf12_control(0x94B2); // attenuate receiver 0x94B2 or 0x94Ba
-  }
-}
+bool node_enabled;       // global variable that enables/disables all code modules
+uint8_t node_id;         // this node's rf12 ID
+
+// EEPROM configuration data
+typedef struct {
+  uint8_t   nodeId;             // rf12 node ID
+  bool      enabled;            // whether node is enabled or not
+} net_config;
 
 // Allocate a packet buffer and return a pointer to it
-net_packet *net_alloc(void) {
-  if (net_bufsz < NET_PKT) return &net_buf[net_bufsz];
+uint8_t *Net::alloc(void) {
+  if (bufcnt < NET_PKT) return buf[bufcnt].data;
   return 0;
 }
 
 // send the packet at the top of the queue
-static void net_doSend(void) {
-  if (net_bufsz > 0) {
-    if (net_buf[0].hdr.type == net_time ||
-        net_sendCnt+1 >= NET_RETRY_MAX) {
-      // send as broadcast packet without ACK
-      rf12_sendStart(net_nodeId, &net_buf[0], net_len[0]);
-      //Serial.print("net_doSend: no-ACK 0x"); Serial.print((word)&net_buf[0], 16);
-      //Serial.print(":"); Serial.println(net_len[0]);
-      // pop packet from queue
-      if (net_bufsz > 1) {
-        memcpy(net_buf, &net_buf[1], sizeof(net_packet)*(NET_PKT-1));
-        memcpy(net_len, &net_len[1], NET_PKT-1);
-      }
-      net_bufsz--;
-      net_sendCnt=0;
+void Net::doSend(void) {
+  if (bufcnt > 0) {
+    uint8_t hdr = buf[0].hdr;
+    // Don't ask for an ACK on the last retry
+    if (sendCnt+1 >= NET_RETRY_MAX)
+      hdr &= ~RF12_HDR_ACK;
+    // send as broadcast packet without ACK
+    rf12_sendStart(hdr, &buf[0].data, buf[0].len);
+#if DEBUG
+    Serial.print("Net::doSend: ");
+    Serial.print(hdr & RF12_HDR_ACK ? " w/ACK " : " no-ACK ");
+    Serial.print((word)&buf[0].data, 16);
+    Serial.print(":"); Serial.println(len[0]);
+#endif
+    // pop packet from queue if we don't expect an ACK
+    if ((hdr & RF12_HDR_ACK) == 0) {
+      if (bufcnt > 1)
+        memcpy(buf, &buf[1], sizeof(net_packet)*(NET_PKT-1));
+      bufcnt--;
+      sendCnt=0;
     } else {
-      // send as broadcast packet and request ACK
-      rf12_sendStart(net_nodeId|RF12_HDR_ACK, &net_buf[0], net_len[0]);
-      //Serial.print("net_doSend: sending 0x"); Serial.print((word)&net_buf[0], 16);
-      //Serial.print(":"); Serial.println(net_len[0]);
-      net_sendCnt++;
-      net_sendTime = millis();
+      sendCnt++;
+      sendTime = millis();
     }
   }
 }
 
 // Send a new packet, this is what user code should call
-void net_send(uint8_t len) {
-  if (net_bufsz >= NET_PKT) return; // error?
-  net_len[net_bufsz] = len;
-  net_bufsz++;
+void Net::send(uint8_t len, bool ack) {
+  if (bufcnt >= NET_PKT) return; // error?
+  buf[bufcnt].len = len;
+  buf[bufcnt].hdr = RF12_HDR_DST | (ack ? RF12_HDR_ACK : 0) | NET_GW_NODE;
+  bufcnt++;
   // if there was no packet queued just go ahead and send the new one
-  if (net_bufsz == 1 && rf12_canSend()) {
-    net_doSend();
+  if (bufcnt == 1 && rf12_canSend()) {
+    doSend();
+  }
+}
+
+// Broadcast a new packet, this is what user code should call
+void Net::bcast(uint8_t len) {
+  if (bufcnt >= NET_PKT) return; // error?
+  buf[bufcnt].len = len;
+  buf[bufcnt].hdr = node_id;
+  bufcnt++;
+  // if there was no packet queued just go ahead and send the new one
+  if (bufcnt == 1 && rf12_canSend()) {
+    doSend();
   }
 }
 
 // Send or queue an ACK packet
-static void net_sendAck(byte nodeId) {
+void Net::sendAck(byte nodeId) {
   // ACK packets have CTL=1, ACK=0; and
   // either DST=1 and the dest of the ack, or DST=0 and this node as source
   int8_t hdr = RF12_HDR_CTL;
-  hdr |= nodeId == net_nodeId ? nodeId : RF12_HDR_DST|nodeId;
+  hdr |= nodeId == node_id ? node_id : RF12_HDR_DST|node_id;
   if (rf12_canSend()) {
     rf12_sendStart(hdr, 0, 0);
+#if DEBUG
     //Serial.print("Sending ACK to "), Serial.println(nodeId);
+#endif
   } else {
-    net_queuedAck = hdr; // queue the ACK
+    queuedAck = hdr; // queue the ACK
   }
 }
 
+// send a node announcement packet -- using during initialization
+void Net::announce(void) {
+  // calculate the announcement packet content
+  if (!INITED) {
+    init_id = 0x80 + 33;    // TODO: generate random value
+    init_crc = 0xAA55;      // TODO: calculate CRC across EEPROM config
+    init_at = millis();
+  }
+  // send the packet
+  if (rf12_canSend()) {
+    struct { uint8_t id; uint16_t crc; } pkt = { init_id, init_crc };
+    rf12_sendStart(NET_UNINIT_NODE, &pkt, sizeof(pkt));
+    // sned next announcement in 500ms or 20s depending on what we got from EEPROM
+    init_at = millis() + (init_id & 0x80 ? 500 : 20*1000);
+  }
+}
 
+// handle initialization packet (response to announcement)
+void Net::handleInit(void) {
+  init_id = rf12_data[4];
+  switch (rf12_data[5]) {
+    case 0: node_enabled = false; break;  // force disable (e.g. new node or crc change)
+    case 1: node_enabled = true; break;   // force enable
+    default: break;                       // whatever EEPROM said (normal case)
+  }
+  init_at = 0;
+}
 
 // Poll the rf12 network and return true if a packet has been received
 // ACKs are processed automatically (and are expected not to have data)
-net_packet *net_poll(void) {
+uint8_t Net::poll(void) {
   if (rf12_recvDone() && rf12_crc == 0) {
     //Serial.println("Got some packet");
     // at this point either it's a broadcast or it's directed at this node
     if (!(rf12_hdr & RF12_HDR_CTL)) {
-      // Normal packet (CTL=0)
-      if (rf12_hdr & RF12_HDR_ACK) net_sendAck(rf12_hdr & RF12_HDR_MASK);
-      return (net_packet *)rf12_data;
+      // Normal packet (CTL=0), send an ACK if that's requested
+      if (rf12_hdr & RF12_HDR_ACK) sendAck(rf12_hdr & RF12_HDR_MASK);
+      // Handle initialization packet
+      if ((rf12_hdr & RF12_HDR_MASK) == NET_UNINIT_NODE) {
+        if (!INITED &&
+            rf12_data[0] == init_id &&
+            rf12_data[1] == (init_crc>>8) &&
+            rf12_data[2] == (init_crc&0xFF)) {
+          handleInit();
+        }
+      } else {
+        return rf12_data[0];
+      }
     } else if (!(rf12_hdr & RF12_HDR_ACK)) {
       // Ack packet, check that it's for us and that we're waiting for an ACK
       //Serial.print("Got ACK for "); Serial.println(rf12_hdr, 16);
-      if ((rf12_hdr&RF12_HDR_MASK) == net_nodeId && net_bufsz > 0 && net_sendCnt > 0) {
+      if ((rf12_hdr&RF12_HDR_MASK) == node_id && bufcnt > 0 && sendCnt > 0) {
         // pop packet from queue
-        if (net_bufsz > 1) {
-          memcpy(net_buf, &net_buf[1], sizeof(net_packet)*(NET_PKT-1));
-          memcpy(net_len, &net_len[1], NET_PKT-1);
+        if (bufcnt > 1) {
+          memcpy(buf, &buf[1], sizeof(net_packet)*(NET_PKT-1));
         }
-        net_bufsz--;
-        net_sendCnt=0;
+        bufcnt--;
+        sendCnt=0;
       }
     }
   }
 
+  // If we need to resend the announcement, try to send it
+  if (!INITED && millis() >= init_at) {
+    announce();
+
   // If we have a queued ack, try to send it
-  if (net_queuedAck && rf12_canSend()) {
-    rf12_sendStart(net_queuedAck, 0, 0);
-    net_queuedAck = 0;
+  } else if (queuedAck && rf12_canSend()) {
+    rf12_sendStart(queuedAck, 0, 0);
+    queuedAck = 0;
 
   // We have a freshly queued message (never sent), try to send it
-  } else if (net_bufsz > 0 && net_sendCnt == 0) {
+  } else if (bufcnt > 0 && sendCnt == 0) {
     if (rf12_canSend())
-      net_doSend();
+      doSend();
     //else
     //  Serial.print("#");
 
   // We have a queued message  that hasn't been acked and it's time to retry
-  } else if (net_bufsz > 0 && net_sendCnt > 0 && millis() >= net_sendTime+NET_RETRY_MS) {
+  } else if (bufcnt > 0 && sendCnt > 0 && millis() >= sendTime+NET_RETRY_MS) {
     if (rf12_canSend())
-      net_doSend();
+      doSend();
     //else
     //  Serial.print(".");
 
@@ -146,18 +202,47 @@ net_packet *net_poll(void) {
   return 0;
 }
 
-void Console::send(void) {
-  net_packet *pkt = net_alloc();
-  if (pkt) {
-    pkt->msg.type = net_msg;
-    pkt->msg.time = now();
-    memcpy(&pkt->msg.txt, buffer, ix);
-    net_send(ix+5); // +5 for type byte and for time
-    buffer[ix] = 0;
-    Serial.print("Console: ");
-    Serial.print((char *)buffer);
+// Constructor
+Net::Net(uint8_t group_id, bool lowPower) {
+  this->group_id = group_id;
+  this->lowPower = lowPower;
+  init_id = 0x80;
+  init_at = -1;
+}
+
+// ===== Configuration =====
+
+uint8_t Net::moduleId(void) { return NET_MODULE; }
+uint8_t Net::configSize(void) { return sizeof(net_config); }
+void Net::receive(volatile uint8_t *pkt, uint8_t len) { return; } // this is never called :-)
+
+// ApplyConfig() not just processes the EEPROM config but also initializes the RF12 module
+void Net::applyConfig(uint8_t *cf) {
+  net_config *eeprom = (net_config *)cf;
+  
+  // do we have data from EEPROM or not?
+  if (eeprom) {
+    // yes
+    init_id = eeprom->nodeId;  // the ID used within announcement pkt is our normal node ID
   } else {
-    //Serial.println("*** out of rf12 buffers ***");
+    // nope, note that init_id defaults to 0x80 and will get something random in the lower bits
+    // we need to punch-in some default values
+    eeprom->nodeId = NET_UNINIT_NODE;
+    eeprom->enabled = false;
   }
-  ix = 0;
+  node_id = eeprom->nodeId;
+  node_enabled = eeprom->enabled;
+  
+  // initialize rf12 module
+  Serial.print("Config Net: node_id=");
+  Serial.println(node_id);
+  rf12_initialize(node_id, RF12_915MHZ, group_id);
+  if (lowPower) {
+    Serial.println("  reducing tx power and rx gain");
+    rf12_control(0x9857); // reduce tx power
+    rf12_control(0x94B2); // attenuate receiver 0x94B2 or 0x94Ba
+  }
+
+  // start announcement
+  announce();
 }

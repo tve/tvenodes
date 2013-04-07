@@ -1,19 +1,22 @@
 // Copyright (c) 2013 by Thorsten von Eicken
-// Seedling misting and lighting node
-//   Relay plug
-// Functions:
-//   - 
+//
+// Simple test node with One-Wire DS18B20 sensor on port 1 and BlinkPlug on port 2
+// Optionally LCD for local display of info
 
 #undef USE_LCD
-#define HELLO ("\n***** RUNNING: " __FILE__)
+#define HELLO ("***** RUNNING: " __FILE__ "\n")
 
 #include <JeeLib.h>
 #include <Time.h>
+#include <Config.h>
 #include <Net.h>
+#include <Log.h>
+#include <NetTime.h>
 #include <OwTemp.h>
 
-#define LCD_PORT      2
-#define OW_PORT       3
+#define OW_PORT       1
+#define BLINK_PORT    2
+#define LCD_PORT      3
 #define N_TEMP        1
 
 #ifdef USE_LCD
@@ -24,166 +27,57 @@
 # define screen_height 2
 #endif
 
-Console console;
-MilliTimer notSet, lcdUpdate;
-uint8_t lastRssi = 0;
-
-//===== Temperature Sensors =====
-
-// Polls and keeps track of a number of one-wire temperature sensors. Reads the sensors
-// every few seconds and keeps track of daily min/max by having an array of the min/max
-// for every hour and shifting that. So at any point in time it has the min/max for the
-// past 24 hours with a 1-hour granularity.
-
-OwTemp owt(OW_PORT+3);
-byte temp_num = 0;          // number of temp sensors
-
+#define MAX_TEMP     2
 #define TEMP_PERIOD 20      // how frequently to read sensors (in seconds)
-#define MAX_TEMP 2          // max number of temperature sensors supported
-#define T_AIR    0
 
-// Sensor 1-wire addresses
-uint64_t temp_addr[MAX_TEMP] = {
-  0x0c00000131945B28LL, // test sensor
-  0x0000000000000028LL, // spare
-};
+Net net(0xD4, true);  // default group_id and low power
+NetTime nettime;
+Log logger;
+MilliTimer notSet, lcdUpdate;
+MilliTimer debugTimer;
+OwTemp owTemp(OW_PORT+3, MAX_TEMP);
 
 // Temperature names
 char temp_name[MAX_TEMP][5] = { "Air ", "?" };
 
-// Temperatures
-float  temp_now[MAX_TEMP];      // current temperatures
-int8_t temp_min[MAX_TEMP][24];  // per-hour minimum temperatures for past 24 hours
-int8_t temp_max[MAX_TEMP][24];  // per-hour maximum temperatures for past 24 hours
-
-// Timer/counter to shift min/max temps every hour
-MilliTimer minMaxTimer;  // 60 second timer
-byte minMaxCount = 0;    // count 60 minutes
-
-// Find temperature sensors and print what we found
-void find_temp() {
-  temp_num = owt.setup(N_TEMP, temp_addr);
-
-#ifdef USE_LCD
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Found ");
-  lcd.print(temp_num);
-  lcd.print("/");
-  lcd.print(N_TEMP);
-  lcd.println(" temps ");
-#endif
-
-  Serial.print("Found ");
-  Serial.print(temp_num);
-  Serial.print(" of ");
-  Serial.print(N_TEMP);
-  Serial.println(" sensors");
-}
-
-// Update temperature sensors and keep track on min/max
-// Keeps it own timer to know when to read temp sensors, force=true overrides
-// that and forces a read
-void loop_temp(boolean force=false) {
-  if (owt.poll(force ? 0 : 20)) {
-    console.print("Temperatures: ");
-    for (int s=0; s<N_TEMP; s++) {
-      console.print(temp_name[s]); console.print(":");
-      float t = owt.get(temp_addr[s]);
-      if (isnan(t)) t = owt.get(temp_addr[s]);
-      if (!isnan(t)) {
-        temp_now[s] = t;
-        int8_t rt = (int8_t)(temp_now[s] + 0.5);
-        if  (rt < temp_min[s][0]) temp_min[s][0] = rt;
-        if  (rt > temp_max[s][0]) temp_max[s][0] = rt;
-        console.print(temp_now[s]); console.print(" ");
-      } else {
-        console.print("NaN   ");
-      }
-    }
-    console.println();
-
-    // rotate min/max temp every hour
-    if (minMaxTimer.poll(60000)) {
-      minMaxCount++;
-      if (minMaxCount == 60) {
-        minMaxCount = 0;
-        // rotate min/max temps
-        for (int s=0; s<N_TEMP; s++) {
-          for (int i=23; i>0; i--) {
-            temp_min[s][i] = temp_min[s][i-1];
-            temp_max[s][i] = temp_max[s][i-1];
-          }
-        }
-      }
-    }
-  }
-}
-
-// Initialize temperature sensor "module"
-void setup_temp() {
-  find_temp();
-  loop_temp(true);
-
-  // init min/max arrays
-  for (int i=0; i<MAX_TEMP; i++) {
-    for (int j=0; j<24; j++) {
-      temp_min[i][j] = (int8_t)(temp_now[i]+0.5);
-      temp_max[i][j] = (int8_t)(temp_now[i]+0.5);
-    }
-  }
-}
-
 //===== setup & loop =====
+
+static Configured *(node_config[]) = {
+  &net, &logger, &nettime, &owTemp, 0
+};
 
 void setup() {
   Serial.begin(57600);
   Serial.println(HELLO);
+
+  config_init(node_config);
 
 # ifdef USE_LCD
   lcd.begin(screen_width, screen_height);
   lcd.print("=>" __FILE__);
 # endif
   
-  net_setup(NET_HELLO_NODE, true);
-  console.println(HELLO);
+  logger.println(HELLO);
 
-  setup_temp();
+  owTemp.setup((Print*)&logger);
   notSet.set(1000);
 }
 
 void loop() {
-  net_packet *pkt;
-  bool wasSet;
+  if (net.poll())
+    config_dispatch();
+  owTemp.loop(TEMP_PERIOD);
 
-  // Keep the network movin'
-  if ((pkt = net_poll())) {
-    lastRssi = rf12_getRSSI();
-    //Serial.print("RCV rssi=");
-    //Serial.println(lastRssi);
-    switch (pkt->hdr.type) {
-    case net_time:
-      wasSet = timeStatus();
-      // set local clock
-      setTime(pkt->time.time);
-      if (!wasSet) console.println("Time initialized");
-
-      // print the time
-      //t = now();
-      //console.print("Got updated time ");
-      //console.println(t);
-      break;
-    default:
-      console.print("Unknown message type=");
-      console.println(pkt->hdr.type);
-      break;
-    }
+  // Debug to serial port
+  if (debugTimer.poll(10000)) {
+    Serial.println("OwTimer debug...");
+    owTemp.printDebug((Print*)&logger);
   }
 
   // If we don't know the time of day, just sit there and wait for it to be set
   if (timeStatus() != timeSet) {
     if (notSet.poll(60000)) {
-      console.println("Time not set");
+      logger.println("Time not set");
 #ifdef USE_LCD
       lcd.setCursor(0,1); // second line
       lcd.print("Time not set");
@@ -191,9 +85,6 @@ void loop() {
     }
     return;
   }
-
-  // Main functionality
-  loop_temp();
 
   // Update the time display on the LCD
 #ifdef USE_LCD

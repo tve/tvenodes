@@ -1,33 +1,44 @@
+#include <JeeLib.h>
 #include <OwTemp.h>
 #include <OneWire.h> // needed by makefile, ugh
+#include <Config.h>
+#include <Log.h>
 
-#define OWTEMP_CONVTIME 200 //188 // milliseconds for a conversion
+#define OWTEMP_CONVTIME 188 // milliseconds for a conversion (10 bits)
+#define TEMP_OFFSET      88 // offset used to store min/max in 8 bits
 
-OwTemp::OwTemp(byte pin) : ds(pin)
-{
-  temp_count = 0;
-  temp_state = 0;
+// ===== Constructors =====
+
+OwTemp::OwTemp(byte pin, uint8_t count) : ds(pin) {
+  init(pin, count);
+  sensAddr = (uint64_t *)calloc(sensCount, sizeof(uint64_t));
+  staticAddr = false;
 }
 
-void OwTemp::print(uint64_t addr) {
-  uint8_t *a = (uint8_t *)&addr;
-  Serial.print("0x");
-  for (byte b=0; b<8; b++) {
-    Serial.print(*a >> 4, HEX);
-    Serial.print(*a & 0xF, HEX);
-    a++;
-  }
+OwTemp::OwTemp(byte pin, uint8_t count, uint64_t *addr) : ds(pin) {
+  init(pin, count);
+  sensAddr = addr;
+  staticAddr = true;
 }
 
-byte OwTemp::setup(byte num, uint64_t *addrs) {
-  // add what we're told to our address table
-  temp_count = num;
-  for(byte s=0; s<num; s++) temp_addr[s] = addrs[s];
+void OwTemp::init(byte pin, uint8_t count) {
+  sensCount = count < 16 ? count : 16;
+  convState = 0;
+  failed = 0;
+  sensTemp = (float *)calloc(sensCount, sizeof(float));
+  sensMin  = (int8_t (*)[6])calloc(sensCount, 6*sizeof(int8_t));
+  sensMax  = (int8_t (*)[6])calloc(sensCount, 6*sizeof(int8_t));
+}
 
+// ===== Operation =====
+
+uint8_t OwTemp::setup(Print *printer) {
   // run a search on the bus to see what we actually find
   uint64_t addr;                   // next detected sensor
   uint16_t found = 0;              // which addrs we actually found
+  uint16_t added = 0;              // which addrs are new
   byte n_found = 0;                // number of sensors actually discovered
+
 	ds.reset_search();
   while (ds.search((uint8_t *)&addr)) {
     // make sure the CRC is valid
@@ -37,17 +48,20 @@ byte OwTemp::setup(byte num, uint64_t *addrs) {
     n_found++;
 
     // see whether we know this sensor already
-    for (byte s=0; s<temp_count; s++) {
-      if (addr == temp_addr[s]) {
-        // yup! we know this one
-        if (s < num) found |= (uint16_t)1 << s;  // mark sensor as found
+    for (byte s=0; s<sensCount; s++) {
+      if (addr == sensAddr[s]) {
+        found |= (uint16_t)1 << s;  // mark sensor as found
         goto cont;
       }
     }
 
     // new sensor, if we have space add it
-    if (temp_count < OWTEMP_COUNT) {
-      temp_addr[temp_count++] = addr;
+    for (byte s=0; s<sensCount; s++) {
+      if (sensAddr[s] == 0) {
+        sensAddr[s] = addr;
+        added |= (uint16_t)1 << s;  // mark sensor as added
+        break;
+      }
     }
 
   cont: ;
@@ -55,76 +69,210 @@ byte OwTemp::setup(byte num, uint64_t *addrs) {
 	ds.reset_search();
 
   // make sure all temp sensors are set to 10 bits of resolution
-  for (byte s=0; s<temp_count; s++)
-    if ((temp_addr[s]&0xff) == 0x22 || (temp_addr[s]&0xff) == 0x28)
-      setresolution(temp_addr[s], 10);
+  for (byte s=0; s<sensCount; s++)
+    if ((sensAddr[s]&0xff) == 0x22 || (sensAddr[s]&0xff) == 0x28)
+      setresolution(sensAddr[s], 10);
 
   // print info about additional sensors found
-  if (temp_count > num) {
-    Serial.print("Unknown sensors:");
-    for (byte s=num; s<temp_count; s++) {
-      Serial.print(" ");
-      print(temp_addr[s]);
+  if (added) {
+    printer->print("New sensors:");
+    for (byte s=0; s<sensCount; s++) {
+      if (added & ((uint16_t)1 << s)) {
+        printer->print(" ");
+        printAddr(printer, sensAddr[s]);
+      }
     }
-    Serial.println();
+    printer->println();
   }
 
   // print info about missing sensors
-  if (found != (uint16_t)(1<<num)-1) {
-     Serial.print("Missing sensors:");
-     //Serial.print(" ("); Serial.print(found, HEX); Serial.print("/");
-		 //Serial.print(num); Serial.print(") ");
-     for (byte s=0; s<num; s++) {
-       if (!(found & (1<<s))) {
-         Serial.print(" ");
-         print(temp_addr[s]);
-       }
+  uint16_t missing = (((uint16_t)1 << sensCount)-1) & ~(found | added);
+  if (missing) {
+    printer->print("Missing sensors:");
+    for (byte s=0; s<sensCount; s++) {
+      if (added & ((uint16_t)1 << s)) {
+        printer->print(" ");
+        printAddr(printer, sensAddr[s]);
+      }
     }
-    Serial.println();
+    printer->println();
   }
 
   // start a conversion
-  if (temp_count > 0) {
-		temp_last = millis();
-		temp_state = 2;
-		start();
-    delay(OWTEMP_CONVTIME);
-  }
+  lastConv = millis();
+  start();
+
   return n_found;
 }
 
 // Poll temperature sensors every <secs> seconds; use secs=0 to force conversion now
-byte OwTemp::poll(byte secs) {
+bool OwTemp::loop(uint8_t secs) {
+  // rotate min/max temp every 4 hours
+  if (minMaxTimer.poll(60000)) {
+    minMaxCount++;
+    if (minMaxCount == 4*60) {
+      minMaxCount = 0;
+      // rotate min/max temps
+      for (int s=0; s<sensCount; s++) {
+        for (int i=5; i>0; i--) {
+          sensMin[s][i] = sensMin[s][i-1];
+          sensMax[s][i] = sensMax[s][i-1];
+        }
+      }
+    }
+  }
+
   unsigned long now = millis();
-  switch (temp_state) {
+  switch (convState) {
     case 0: // no sensors
       break;
     case 1: // idle
-      if (secs == 0 || now - temp_last > (unsigned long)secs * 1000) {
+      if (secs == 0 || now - lastConv > (unsigned long)secs * 1000) {
         // start a conversion
-        temp_last = now;
-        temp_state = 2;
+        lastConv = now;
         start();
       }
       break;
     case 2: // conversion in progress
-      if (now - temp_last > OWTEMP_CONVTIME) {
-        for (int i=0; i<temp_count; i++) {
-          temp[i] = read(temp_addr[i]);
+      if (now - lastConv > OWTEMP_CONVTIME) {
+        // time to read the results
+        for (byte s=0; s<sensCount; s++) {
+          float t = read(sensAddr[s]);
+          uint16_t bit = (uint16_t)1 << s;
+          if (isnan(t)) {
+            // conversion failed
+            if (failed & bit) {
+              // sensor has been failing
+              sensTemp[s] = NAN;
+            } else {
+              failed |= bit;
+            }
+          } else {
+            // conversion succeeded
+            failed &= ~bit;
+            sensTemp[s] = t;
+            // update min/max
+            int8_t m = (int8_t)(t-TEMP_OFFSET+0.5);
+            if (m < sensMin[s][0]) sensMin[s][0] = m;
+            if (m > sensMax[s][0]) sensMax[s][0] = m;
+          }
         }
-        temp_state = 1;
+        convState = 1;
 				return true;
       }
   }
 	return false;
 }
 
-float OwTemp::get(uint64_t addr) {
-  for (byte i=0; i<temp_count; i++) {
-    if (temp_addr[i] == addr) return temp[i];
+// ===== Accessors =====
+
+float OwTemp::get(uint8_t i) {
+  return i < sensCount ? sensTemp[i] : NAN;
+}
+
+float OwTemp::getByAddr(uint64_t addr) {
+  for (byte s=0; s<sensCount; s++) {
+    if (sensAddr[s] == addr) return sensTemp[s];
   }
   return NAN;
 }
+
+uint64_t OwTemp::getAddr(uint8_t i) {
+  return i < sensCount ? sensAddr[i] : NAN;
+}
+
+uint16_t OwTemp::getMin(uint8_t i) {
+  if (i >= sensCount) return 0x8000;
+  int8_t t = sensMin[i][0];
+  for (uint8_t h=1; h<6; h++)
+    if (sensMin[i][h] < t)
+      t = sensMin[i][h];
+  return t + TEMP_OFFSET;
+}
+
+uint16_t OwTemp::getMax(uint8_t i) {
+  if (i >= sensCount) return 0x8000;
+  int8_t t = sensMax[i][0];
+  for (uint8_t h=1; h<6; h++)
+    if (sensMax[i][h] > t)
+      t = sensMax[i][h];
+  return t + TEMP_OFFSET;
+}
+
+void OwTemp::swap(uint8_t i, uint8_t j) {
+  if (i >= sensCount || j >= sensCount) return;
+  // swap temperatures
+  float t = sensTemp[i];
+  sensTemp[i] = sensTemp[j];
+  sensTemp[j] = t;
+  // swap addresses
+  uint64_t a = sensAddr[i];
+  sensAddr[i] = sensAddr[j];
+  sensAddr[j] = a;
+  // clear min and max
+  memset(sensMin[i], 0, 6);
+  memset(sensMax[i], 0, 6);
+}
+
+
+void OwTemp::printAddrRev(Print *printer, uint64_t addr) {
+  uint8_t *a = (uint8_t *)&addr;
+  printer->print("0x");
+  for (byte b=7; b>=0; b--) {
+    printer->print(a[b] >> 4, HEX);
+    printer->print(a[b] & 0xF, HEX);
+  }
+}
+
+void OwTemp::printAddr(Print *printer, uint64_t addr) {
+  uint8_t *a = (uint8_t *)&addr;
+  printer->print("0x");
+  for (byte b=0; b<8; b++) {
+    printer->print(*a >> 4, HEX);
+    printer->print(*a & 0xF, HEX);
+    a++;
+  }
+}
+
+void OwTemp::printDebug(Print *printer) {
+  printer->print("OwTemp has ");
+  printer->print(sensCount);
+  printer->println(" sensors");
+  for (uint8_t s=0; s<sensCount; s++) {
+    printer->print("#");
+    printer->print(s);
+    printer->print(": ");
+    printAddr(printer, sensAddr[s]);
+    printer->print(" now:");
+    printer->print(sensTemp[s]);
+    printer->print("F min:");
+    for (uint8_t i=0; i<6; i++) {
+      printer->print((int16_t)(sensMin[s][i])+TEMP_OFFSET);
+      printer->print(",");
+    }
+    printer->print(" max:");
+    for (uint8_t i=0; i<6; i++) {
+      printer->print((int16_t)(sensMax[s][i])+TEMP_OFFSET);
+      printer->print(",");
+    }
+    printer->println();
+  }
+}
+
+// ===== Configuration =====
+
+uint8_t OwTemp::moduleId(void) { return OWTEMP_MODULE; }
+
+uint8_t OwTemp::configSize(void) { return sizeof(uint64_t)*sensCount; }
+
+void OwTemp::applyConfig(uint8_t *) {
+}
+
+void OwTemp::receive(volatile uint8_t *pkt, uint8_t len) {
+  // sorry, we ain't processing no packets...
+}
+
+// ===== One Wire utilities =====
 
 // Set the resolution
 void OwTemp::setresolution(uint64_t addr, byte bits) {
@@ -135,7 +283,7 @@ void OwTemp::setresolution(uint64_t addr, byte bits) {
   ds.write(0, 0);                    // temp high
   ds.write(0, 0);                    // temp low
   ds.write(((bits-9)<<5) + 0x1F, 0); // configuration
-  // copy to EEPROM
+  // copy to sensor's EEPROM
   ds.reset();
   ds.select((uint8_t *)&addr);
   ds.write(0x48, 1);                  // copy to eeprom with strong pullup
@@ -148,6 +296,7 @@ void OwTemp::start() {
   ds.reset();
   ds.skip();
   ds.write(0x44, 1);         // start conversion, with parasite power on at the end
+  convState = 2;
 }
 
 // Raw reading of temperature, returns INT16_MIN on failure
