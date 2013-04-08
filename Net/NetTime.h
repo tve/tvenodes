@@ -20,8 +20,6 @@ public:
 	NetTime(void);
 
   // Configuration methods
-  virtual uint8_t moduleId(void);
-  virtual uint8_t configSize(void);
 	virtual void applyConfig(uint8_t *);
 	virtual void receive(volatile uint8_t *pkt, uint8_t len);
 };

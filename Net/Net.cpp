@@ -14,6 +14,7 @@
 // node 31: reserved for receive-all-packets
 
 #include <JeeLib.h>
+#include <alloca.h>
 #include <Config.h>
 #include <Net.h>
 #include <Time.h>
@@ -54,7 +55,7 @@ void Net::doSend(void) {
     // send as broadcast packet without ACK
     rf12_sendStart(hdr, &buf[0].data, buf[0].len);
 #if DEBUG
-    Serial.print("Net::doSend: ");
+    Serial.print(F("Net::doSend: "));
     Serial.print(hdr & RF12_HDR_ACK ? " w/ACK " : " no-ACK ");
     Serial.print((word)&buf[0].data, 16);
     Serial.print(":"); Serial.println(len[0]);
@@ -124,8 +125,9 @@ void Net::announce(void) {
   if (rf12_canSend()) {
     struct { uint8_t id; uint16_t crc; } pkt = { init_id, init_crc };
     rf12_sendStart(NET_UNINIT_NODE, &pkt, sizeof(pkt));
-    // sned next announcement in 500ms or 20s depending on what we got from EEPROM
+    // send next announcement in 500ms or 20s depending on what we got from EEPROM
     init_at = millis() + (init_id & 0x80 ? 500 : 20*1000);
+    Serial.println("Net: sending announcement");
   }
 }
 
@@ -144,7 +146,7 @@ void Net::handleInit(void) {
 // ACKs are processed automatically (and are expected not to have data)
 uint8_t Net::poll(void) {
   if (rf12_recvDone() && rf12_crc == 0) {
-    //Serial.println("Got some packet");
+    Serial.println("Got some packet");
     // at this point either it's a broadcast or it's directed at this node
     if (!(rf12_hdr & RF12_HDR_CTL)) {
       // Normal packet (CTL=0), send an ACK if that's requested
@@ -208,12 +210,12 @@ Net::Net(uint8_t group_id, bool lowPower) {
   this->lowPower = lowPower;
   init_id = 0x80;
   init_at = -1;
+  moduleId = NET_MODULE;
+  configSize = sizeof(net_config);
 }
 
 // ===== Configuration =====
 
-uint8_t Net::moduleId(void) { return NET_MODULE; }
-uint8_t Net::configSize(void) { return sizeof(net_config); }
 void Net::receive(volatile uint8_t *pkt, uint8_t len) { return; } // this is never called :-)
 
 // ApplyConfig() not just processes the EEPROM config but also initializes the RF12 module
@@ -221,28 +223,37 @@ void Net::applyConfig(uint8_t *cf) {
   net_config *eeprom = (net_config *)cf;
   
   // do we have data from EEPROM or not?
-  if (eeprom) {
+  if (eeprom && eeprom->nodeId != NET_UNINIT_NODE) {
     // yes
     init_id = eeprom->nodeId;  // the ID used within announcement pkt is our normal node ID
   } else {
+    eeprom = (net_config *)alloca(sizeof(net_config));
     // nope, note that init_id defaults to 0x80 and will get something random in the lower bits
     // we need to punch-in some default values
     eeprom->nodeId = NET_UNINIT_NODE;
     eeprom->enabled = false;
+    config_write(NET_MODULE, eeprom);
   }
   node_id = eeprom->nodeId;
   node_enabled = eeprom->enabled;
+
+  setNodeId(node_id);
   
+  // start announcement
+  announce();
+}
+
+void Net::setNodeId(uint8_t id) {
+  node_id = id;
   // initialize rf12 module
-  Serial.print("Config Net: node_id=");
-  Serial.println(node_id);
+  Serial.print(F("Config Net: node_id="));
+  Serial.print(node_id);
+  Serial.print(F(" group_id="));
+  Serial.println(group_id);
   rf12_initialize(node_id, RF12_915MHZ, group_id);
   if (lowPower) {
-    Serial.println("  reducing tx power and rx gain");
+    Serial.println(F("  reducing tx power and rx gain"));
     rf12_control(0x9857); // reduce tx power
     rf12_control(0x94B2); // attenuate receiver 0x94B2 or 0x94Ba
   }
-
-  // start announcement
-  announce();
 }

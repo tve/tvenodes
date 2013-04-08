@@ -12,12 +12,11 @@
 // constructor
 NetTime::NetTime(void) {
 	offset = 0; // UTC default
+  moduleId = NETTIME_MODULE;
+  configSize = sizeof(nettime_config);
 }
 
 // ===== Configuration =====
-
-uint8_t NetTime::moduleId(void) { return NETTIME_MODULE; }
-uint8_t NetTime::configSize(void) { return sizeof(nettime_config); }
 
 // Receive a time packet with UTC time
 void NetTime::receive(volatile uint8_t *pkt, uint8_t len) {
@@ -29,5 +28,8 @@ void NetTime::receive(volatile uint8_t *pkt, uint8_t len) {
 }
 
 void NetTime::applyConfig(uint8_t *cf) {
-	offset = *(int8_t *)cf;
+  if (cf)
+    offset = *(int8_t *)cf;
+  else
+    config_write(NETTIME_MODULE, &offset);
 }

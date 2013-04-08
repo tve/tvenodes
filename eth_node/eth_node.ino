@@ -5,11 +5,7 @@
 //   - queries NTP server for current time and broadcasts on rf12 net
 
 #include <EtherCard.h>
-#include <JeeLib.h>
-#include <Time.h>
-#include <Net.h>
-
-#define HELLO ("\n***** RUNNING: " __FILE__)
+#include <NetAll.h>
 
 // Ethernet data
 byte Ethernet::buffer[550];   // tcp/ip send and receive buffer
@@ -63,21 +59,34 @@ void eth_print(uint8_t nodeId, time_t t, const char *txt) {
   // print message
   strcpy(ptr, txt);
   ether.udpTransmit(strlen((char *)gPB+UDP_DATA_P));
-  Serial.print((char*)gPB+UDP_DATA_P);
-  if (txt[strlen(txt)-1] == '\n') Serial.print('\r');
+  //Serial.print((char*)gPB+UDP_DATA_P);
+  //if (txt[strlen(txt)-1] == '\n') Serial.print('\r');
 }
 
 //===== setup & loop =====
 
+Net net(0xD4, true);  // default group_id and low power
+//Log logger;
 MilliTimer ntpTimer;
 BlinkPlug bl(4);
 
+static Configured *(node_config[]) = {
+  &net, 0
+};
+
 void setup() {
   Serial.begin(57600);
-  Serial.println(HELLO);
+  Serial.println(F("***** SETUP: " __FILE__));
+
+  //eeprom_write_word((uint16_t *)0x20, 0xDEAD);
 
   bl.ledOff(3);
   bl.ledOn(2);
+
+  config_init(node_config);
+  if (node_id != NET_GW_NODE) {
+    net.setNodeId(NET_GW_NODE);
+  }
   
 #if 0
   Serial.print("MAC: ");
@@ -102,16 +111,14 @@ void setup() {
   //ether.printIp("GW IP: ", ether.gwip);
   //ether.printIp("DNS IP: ", ether.dnsip);
 
-  net_setup(NET_ETH_NODE, true);
-
   bl.ledOff(2);
   
   ntpTimer.poll(1000);
+
+  Serial.println(F("***** RUNNING: " __FILE__));
 }
 
 void loop() {
-  net_packet *pkt;
-
   // Send an NTP time request
   if (ntpTimer.poll(5000)) {
     ether.ntpRequest(ntpServer, ntpClientPort);
@@ -120,11 +127,12 @@ void loop() {
   }
 
   // Keep rf12 moving
-  if ((pkt = net_poll())) {
-    //Serial.print("Packet: type=");
-    //Serial.print(pkt->hdr.type);
-    //Serial.print(" len=");
-    //Serial.println(pkt->hdr.len);
+  if (net.poll()) {
+    Serial.print("Packet: module=");
+    Serial.print(*(uint8_t*)rf12_data);
+    Serial.print(" len=");
+    Serial.println(rf12_len);
+#if 0
     switch (pkt->hdr.type) {
     case net_time:
       // ignore
@@ -153,9 +161,10 @@ void loop() {
       Serial.println();
       break;
     }
+#endif
   }
   
-  // Receive ethernet packages
+  // Receive ethernet packets
   int plen = ether.packetReceive();
   ether.packetLoop(plen);
   if (plen > 0) {
@@ -172,11 +181,11 @@ void loop() {
 
       // Try to send it once on the rf12 radio (don't let it get stale)
       if (rf12_canSend()) {
-        struct net_time tbuf = { net_time, time };
-        rf12_sendStart(NET_ETH_NODE, &tbuf, sizeof(tbuf));
-        eth_print(net_nodeId, time, "Sent time update\n");
+        struct net_time { uint8_t module; uint32_t time; } tbuf = { NETTIME_MODULE, time };
+        rf12_sendStart(NET_GW_NODE, &tbuf, sizeof(tbuf));
+        eth_print(node_id, time, "Sent time update\n");
       } else {
-        eth_print(net_nodeId, time, "Cannot send time update\n");
+        eth_print(node_id, time, "Cannot send time update\n");
       }
 
       // print the time

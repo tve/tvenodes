@@ -14,6 +14,8 @@
 // constructor
 Log::Log(void) {
 	ix = 0;
+  moduleId = LOG_MODULE;
+  configSize = sizeof(log_config);
 	memset(&config, 0, sizeof(log_config));
 	config.serial = true;
 }
@@ -61,18 +63,22 @@ size_t Log::write (uint8_t v) {
 
 // ===== Configuration =====
 
-uint8_t Log::moduleId(void) { return LOG_MODULE; }
-uint8_t Log::configSize(void) { return sizeof(log_config); }
 void Log::receive(volatile uint8_t *pkt, uint8_t len) { return; } // this is never called :-)
 
 void Log::applyConfig(uint8_t *cf) {
   if (cf) {
     memcpy(&config, cf, sizeof(log_config));
-    Serial.print("Config Log: 0x");
-    Serial.println(*cf, HEX);
+    //Serial.print(F("Config Log: 0x"));
+    //Serial.println(*cf, HEX);
   } else {
     memset(&config, 0, sizeof(log_config));
     config.serial = 1;
-    Serial.println("Config Log: init to serial");
+    config_write(LOG_MODULE, &config);
   }
+  Serial.print(F("Config Log:"));
+  if (config.serial) Serial.print(F(" serial"));
+  if (config.lcd) Serial.print(F(" lcd"));
+  if (config.net) Serial.print(F(" net"));
+  if (config.time) Serial.print(F(" time"));
+  Serial.println();
 }

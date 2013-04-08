@@ -4,14 +4,9 @@
 // Optionally LCD for local display of info
 
 #undef USE_LCD
-#define HELLO ("***** RUNNING: " __FILE__ "\n")
 
-#include <JeeLib.h>
-#include <Time.h>
-#include <Config.h>
-#include <Net.h>
-#include <Log.h>
-#include <NetTime.h>
+#include <avr/eeprom.h>
+#include <NetAll.h>
 #include <OwTemp.h>
 
 #define OW_PORT       1
@@ -36,6 +31,7 @@ Log logger;
 MilliTimer notSet, lcdUpdate;
 MilliTimer debugTimer;
 OwTemp owTemp(OW_PORT+3, MAX_TEMP);
+BlinkPlug blk(2);
 
 // Temperature names
 char temp_name[MAX_TEMP][5] = { "Air ", "?" };
@@ -48,7 +44,10 @@ static Configured *(node_config[]) = {
 
 void setup() {
   Serial.begin(57600);
-  Serial.println(HELLO);
+  Serial.println(F("***** SETUP: " __FILE__));
+  blk.ledOn(3);
+
+  //eeprom_write_word((uint16_t *)0x20, 0xF00D);
 
   config_init(node_config);
 
@@ -57,19 +56,24 @@ void setup() {
   lcd.print("=>" __FILE__);
 # endif
   
-  logger.println(HELLO);
-
   owTemp.setup((Print*)&logger);
   notSet.set(1000);
+  logger.println(F("***** RUNNING: " __FILE__));
+  blk.ledOff(3);
 }
 
 void loop() {
-  if (net.poll())
+  if (net.poll()) {
+    blk.ledOn(1);
     config_dispatch();
+    delay(100);
+    blk.ledOff(1);
+  }
+
   owTemp.loop(TEMP_PERIOD);
 
   // Debug to serial port
-  if (debugTimer.poll(10000)) {
+  if (debugTimer.poll(57770)) {
     Serial.println("OwTimer debug...");
     owTemp.printDebug((Print*)&logger);
   }

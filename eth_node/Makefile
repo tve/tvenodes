@@ -1,4 +1,5 @@
-LIBRARIES = OneWire Servo
+LIBRARIES = OneWire
+LOCALLIBS = Net
 include ../arduino.mk
 
 run: upload size
