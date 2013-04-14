@@ -61,12 +61,11 @@ In order to detect code module changes that require reconfiguration the node sto
 Packet structure
 ----------------
 
-There are 6 classes of packets:
+There are 5 classes of packets:
  1. Node announcement packets
  1. Node initialization packets
- 1. Packets from a node to the management server
+ 1. Packets from a node to the management server (and possibly to other nodes)
  1. Packets from the management server to a node
- 1. Inter-node Broadcasts
  1. Acknowledgement packets
 
 The packets have the following format:
@@ -80,11 +79,9 @@ Announcement: |  0  | 0=bcast   |  0  | 31      | node_id | 16-bit CRC | ... |
               +-----+-----------+-----+---------+----------------------------+
 Init          |  0  | 0=bcast   |  0  | 31      | node_id | 16-bit CRC | ... |
               +-----+-----------+-----+---------+----------------------------+
-To mgmt srv   |  0  | 1=unicast | 0/1 | 1 (gw)  | code module id | ...       |
-              +-----+-----------+-----+---------+----------------------------+
 From mgmt srv |  0  | 1=unicast | 0/1 | target  | code module id | ...       |
               +-----+-----------+-----+---------+----------------------------+
-Broadcast     |  0  | 0=bcast   |  0  | source  | code module id | ...       |
+To mgmt srv   |  0  | 0=bcast   |  0  | source  | code module id | ...       |
               +-----+-----------+-----+---------+----------------------------+
 ACK           |  1  | 1=unicast |  0  | target  | null                       |
               +-----+-----------+-----+---------+----------------------------+
