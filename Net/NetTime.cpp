@@ -23,13 +23,14 @@ void NetTime::receive(volatile uint8_t *pkt, uint8_t len) {
   if (len >= 4) {
     bool wasSet = timeStatus();
     setTime(*(uint32_t *)pkt);
-    if (!wasSet) logger.println("Time initialized");
+    if (!wasSet) logger->println(F("Time initialized"));
   }
 }
 
 void NetTime::applyConfig(uint8_t *cf) {
   if (cf)
-    offset = *(int8_t *)cf;
+    offset = ((nettime_config *)cf)->offset;
   else
     config_write(NETTIME_MODULE, &offset);
+	Serial.println("NetTime configured");
 }

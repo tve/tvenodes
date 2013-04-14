@@ -12,20 +12,28 @@
 #define LOG_MAX (RF12_MAXDATA-5)		// max amount of chars that can be logged in one packet
 
 class Log : public Print, public Configured {
+private:
   // Configuration structure stored in EEPROM
   typedef struct {
     bool	serial:1;	// log to serial port
     bool	lcd:1;		// log to LCD
-    bool	net:1;		// log to the network
+    bool	rf12:1;		// log to the rf12 network
+    bool	eth:1;		// log to the eth network (gw only!)
     bool	time:1;		// log the time with each packet
   } log_config;
 
   log_config config;
-  uint8_t buffer[LOG_MAX];
+  uint8_t buffer[LOG_MAX+1];
   uint8_t ix;
 
 	// send accumulated buffer
   void send(void);
+
+protected:
+	// Log to the ethernet, the implementation here does nothing, this must be
+	// overridden in a subclass to actually do something (this is to avoid depending on
+	// the EtherCard library in every sketch)
+  virtual void ethSend(uint8_t *buffer, uint8_t len);
 
 public:
 	// constructor
@@ -40,6 +48,6 @@ public:
 	virtual void receive(volatile uint8_t *pkt, uint8_t len);
 };
 
-extern Log logger;
+extern Log *logger;
 
 #endif // LOG_H

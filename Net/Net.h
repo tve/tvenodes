@@ -63,6 +63,9 @@ public:
   // @ack says whether an ACK should be requested
   void send(uint8_t len, bool ack=true);
 
+	// raw form of send where full header gets passed-in, used by GW to forward from ethernet
+	void rawSend(uint8_t len, uint8_t hdr);
+
   // bcast broadcasts the last allocated buffer as a packet to all nodes.
   // @len is the length of the payload
   void bcast(uint8_t len);

@@ -8,6 +8,7 @@
 // Assumes JeeLib.h is included for rf12 constants
 
 class NetTime : public Configured {
+
   // Configuration structure stored in EEPROM
   typedef struct {
     int8_t	offset;	  // time zone offset

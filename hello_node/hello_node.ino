@@ -1,18 +1,17 @@
 // Copyright (c) 2013 by Thorsten von Eicken
 //
 // Simple test node with One-Wire DS18B20 sensor on port 1 and BlinkPlug on port 2
-// Optionally LCD for local display of info
+// Optionally use LCD on port 3 for local display of info
 
 #undef USE_LCD
 
-#include <avr/eeprom.h>
 #include <NetAll.h>
 #include <OwTemp.h>
+#include <avr/eeprom.h>
 
 #define OW_PORT       1
 #define BLINK_PORT    2
 #define LCD_PORT      3
-#define N_TEMP        1
 
 #ifdef USE_LCD
 # include <PortsLCD.h>
@@ -27,7 +26,7 @@
 
 Net net(0xD4, true);  // default group_id and low power
 NetTime nettime;
-Log logger;
+Log l, *logger=&l;
 MilliTimer notSet, lcdUpdate;
 MilliTimer debugTimer;
 OwTemp owTemp(OW_PORT+3, MAX_TEMP);
@@ -39,7 +38,7 @@ char temp_name[MAX_TEMP][5] = { "Air ", "?" };
 //===== setup & loop =====
 
 static Configured *(node_config[]) = {
-  &net, &logger, &nettime, &owTemp, 0
+  &net, logger, &nettime, &owTemp, 0
 };
 
 void setup() {
@@ -56,9 +55,9 @@ void setup() {
   lcd.print("=>" __FILE__);
 # endif
   
-  owTemp.setup((Print*)&logger);
+  owTemp.setup((Print*)logger);
   notSet.set(1000);
-  logger.println(F("***** RUNNING: " __FILE__));
+  logger->println(F("***** RUNNING: " __FILE__));
   blk.ledOff(3);
 }
 
@@ -74,14 +73,14 @@ void loop() {
 
   // Debug to serial port
   if (debugTimer.poll(57770)) {
-    Serial.println("OwTimer debug...");
+    logger->println("OwTimer debug...");
     owTemp.printDebug((Print*)&logger);
   }
 
   // If we don't know the time of day, just sit there and wait for it to be set
   if (timeStatus() != timeSet) {
     if (notSet.poll(60000)) {
-      logger.println("Time not set");
+      logger->println("Time not set");
 #ifdef USE_LCD
       lcd.setCursor(0,1); // second line
       lcd.print("Time not set");

@@ -7,7 +7,7 @@
 #define OWTEMP_CONVTIME 188 // milliseconds for a conversion (10 bits)
 #define TEMP_OFFSET      88 // offset used to store min/max in 8 bits
 
-#define DEBUG 0
+#define DEBUG 1
 
 // ===== Constructors =====
 
@@ -34,6 +34,13 @@ void OwTemp::init(byte pin, uint8_t count) {
   memset(sensMax, 0x80, sensCount*6*sizeof(int8_t));
   moduleId = OWTEMP_MODULE;
   configSize = sizeof(uint64_t)*sensCount;
+#if DEBUG
+	Serial.print("OwTemp: count=");
+	Serial.print(sensCount);
+	Serial.print(" configSize=");
+	Serial.print(configSize);
+	Serial.println();
+#endif
 }
 
 // ===== Operation =====
@@ -46,12 +53,12 @@ uint8_t OwTemp::setup(Print *printer) {
   byte n_found = 0;                // number of sensors actually discovered
 
 #if DEBUG
-  Serial.print(F("OwTemp setup starting with:"));
+  printer->print(F("OwTemp setup starting with:"));
   for (byte s=0; s<sensCount; s++) {
-    Serial.print(" ");
-    printAddr((Print*)&Serial, sensAddr[s]);
+    printer->print(" ");
+    printAddr(printer, sensAddr[s]);
   }
-  Serial.println();
+  printer->println();
 #endif
 
 	ds.reset_search();
@@ -65,7 +72,7 @@ uint8_t OwTemp::setup(Print *printer) {
     // see whether we know this sensor already
     for (byte s=0; s<sensCount; s++) {
       if (addr == sensAddr[s]) {
-        //Serial.print("    found #"); Serial.println(s);
+        printer->print("    found #"); Serial.println(s);
         found |= (uint16_t)1 << s;  // mark sensor as found
         goto cont;
       }
@@ -75,7 +82,7 @@ uint8_t OwTemp::setup(Print *printer) {
     for (byte s=0; s<sensCount; s++) {
       if (sensAddr[s] == 0) {
         sensAddr[s] = addr;
-        //Serial.print("    added #"); Serial.println(s);
+        printer->print("    added #"); Serial.println(s);
         added |= (uint16_t)1 << s;  // mark sensor as added
         break;
       }
@@ -305,7 +312,7 @@ void OwTemp::applyConfig(uint8_t *cf) {
     if (sensAddr[0] == 0) {
       // address array is empty -> restore from EEPROM
       memcpy(sensAddr, cf, sizeof(uint64_t)*sensCount);
-      //Serial.println(F("Config OwTemp: restored addrs from EEPROM"));
+      Serial.println(F("Config OwTemp: restored addrs from EEPROM"));
     }
   } else {
     // no valid config in EEPROM, leave sensor address array as-is
@@ -356,9 +363,9 @@ int16_t OwTemp::rawRead(uint64_t addr) {
   if (OneWire::crc8(data, 8) != data[8]) {
 #if DEBUG
     Serial.print(F("OWT: Bad CRC   for "));
-    print(addr);
+    printAddr(&Serial, addr);
     Serial.print("->");
-    print(*(uint64_t *)data);
+    printAddr(&Serial, *(uint64_t *)data);
     Serial.println();
 #endif
     return INT16_MIN;
@@ -368,9 +375,9 @@ int16_t OwTemp::rawRead(uint64_t addr) {
   if ((data[0] == 0 && data[1] == 0) || data[5] != 0xFF || data[7] != 0x10) {
 #if DEBUG
     Serial.print(F("OWT: Bad data for "));
-    print(addr);
+    printAddr(&Serial, addr);
     Serial.print("->");
-    print(*(uint64_t *)data);
+    printAddr(&Serial, *(uint64_t *)data);
     Serial.println();
 #endif
     return INT16_MIN;
@@ -378,9 +385,9 @@ int16_t OwTemp::rawRead(uint64_t addr) {
 
 #if DEBUG
   Serial.print(F("OWT: Good data for "));
-  print(addr);
+  printAddr(&Serial, addr);
   Serial.print("->");
-  print(*(uint64_t *)data);
+  printAddr(&Serial, *(uint64_t *)data);
   Serial.println();
 #endif
   

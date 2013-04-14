@@ -75,9 +75,15 @@ void Net::doSend(void) {
 
 // Send a new packet, this is what user code should call
 void Net::send(uint8_t len, bool ack) {
+	uint8_t hdr = RF12_HDR_DST | (ack ? RF12_HDR_ACK : 0) | NET_GW_NODE;
+	rawSend(len, hdr);
+}
+
+// Send a raw packet, this is for the gateway
+void Net::rawSend(uint8_t len, uint8_t hdr) {
   if (bufcnt >= NET_PKT) return; // error?
   buf[bufcnt].len = len;
-  buf[bufcnt].hdr = RF12_HDR_DST | (ack ? RF12_HDR_ACK : 0) | NET_GW_NODE;
+  buf[bufcnt].hdr = hdr;
   bufcnt++;
   // if there was no packet queued just go ahead and send the new one
   if (bufcnt == 1 && rf12_canSend()) {
@@ -115,6 +121,13 @@ void Net::sendAck(byte nodeId) {
 
 // send a node announcement packet -- using during initialization
 void Net::announce(void) {
+  // the ethernet gateway doesn't do the announcement stuff here...
+  if (node_id == NET_GW_NODE) {
+    init_id = node_id;
+    //node_enabled unchanged...
+    init_at = millis();
+    return;
+  }
   // calculate the announcement packet content
   if (!INITED) {
     init_id = 0x80 + 33;    // TODO: generate random value
@@ -127,7 +140,7 @@ void Net::announce(void) {
     rf12_sendStart(NET_UNINIT_NODE, &pkt, sizeof(pkt));
     // send next announcement in 500ms or 20s depending on what we got from EEPROM
     init_at = millis() + (init_id & 0x80 ? 500 : 20*1000);
-    Serial.println("Net: sending announcement");
+    Serial.println(F("Net: sending announcement"));
   }
 }
 
@@ -145,14 +158,15 @@ void Net::handleInit(void) {
 // Poll the rf12 network and return true if a packet has been received
 // ACKs are processed automatically (and are expected not to have data)
 uint8_t Net::poll(void) {
-  if (rf12_recvDone() && rf12_crc == 0) {
-    Serial.println("Got some packet");
+  bool rcv = rf12_recvDone();
+  if (rcv && rf12_crc == 0) {
+    //Serial.println("Got some packet");
     // at this point either it's a broadcast or it's directed at this node
     if (!(rf12_hdr & RF12_HDR_CTL)) {
       // Normal packet (CTL=0), send an ACK if that's requested
       if (rf12_hdr & RF12_HDR_ACK) sendAck(rf12_hdr & RF12_HDR_MASK);
-      // Handle initialization packet
-      if ((rf12_hdr & RF12_HDR_MASK) == NET_UNINIT_NODE) {
+      // Handle initialization packet (in case of GW need to fwd to eth)
+      if (node_id != NET_GW_NODE && (rf12_hdr & RF12_HDR_MASK) == NET_UNINIT_NODE) {
         if (!INITED &&
             rf12_data[0] == init_id &&
             rf12_data[1] == (init_crc>>8) &&
@@ -174,6 +188,8 @@ uint8_t Net::poll(void) {
         sendCnt=0;
       }
     }
+  } else if (rcv && rf12_crc != 0) {
+    //Serial.println("Got packet with bad CRC");
   }
 
   // If we need to resend the announcement, try to send it
@@ -221,9 +237,11 @@ void Net::receive(volatile uint8_t *pkt, uint8_t len) { return; } // this is nev
 // ApplyConfig() not just processes the EEPROM config but also initializes the RF12 module
 void Net::applyConfig(uint8_t *cf) {
   net_config *eeprom = (net_config *)cf;
-  
+
   // do we have data from EEPROM or not?
   if (eeprom && eeprom->nodeId != NET_UNINIT_NODE) {
+    Serial.print(F("Config: ")); Serial.print(eeprom->nodeId);
+    Serial.print(" "); Serial.println(eeprom->enabled);
     // yes
     init_id = eeprom->nodeId;  // the ID used within announcement pkt is our normal node ID
   } else {
@@ -256,4 +274,5 @@ void Net::setNodeId(uint8_t id) {
     rf12_control(0x9857); // reduce tx power
     rf12_control(0x94B2); // attenuate receiver 0x94B2 or 0x94Ba
   }
+	//Serial.println("  rf12 initialized");
 }

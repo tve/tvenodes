@@ -3,23 +3,69 @@
 //   Ether Card
 // Functions:
 //   - queries NTP server for current time and broadcasts on rf12 net
+//   - relay packets pretty much as-is between rf12 and eth
+// BlinkPlug port 2:
+//   - red LED on when IP address is 0.0.0.0      (D to gnd)
+//   - green LED toggles when eth pkt received    (D to vcc)
+//   - yellow LED toggles when rf12 pkt received  (A to vcc)
 
 #include <EtherCard.h>
 #include <NetAll.h>
+#include <avr/eeprom.h>
 
 // Ethernet data
-byte Ethernet::buffer[550];   // tcp/ip send and receive buffer
+byte Ethernet::buffer[500];   // tcp/ip send and receive buffer
+#define gPB ether.buffer
 static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x32 };
 static byte ntpServer[] = { 192, 168, 0, 3 };
 static word ntpClientPort = 123;
 static byte msgServer[] = { 192, 168, 0, 3 };
 static word msgClientPort = 9999;
+static char msgSelf[] = "\xFFHello";
+
+// Timers and ports
+Net net(0xD4, false);         // default group_id and low power
+static MilliTimer ntpTimer;   // timer for sending ntp requests
+static MilliTimer dhcpTimer;  // timer for checking DHCP state
+static Port led(2);           // LEDs: D:green/red, A:yellow/off
+
+static uint32_t num_rf12_rcv = 0;     // counter of rf12 packets received
+static uint32_t num_rf12_snd = 0;     // counter of rf12 packets sent
+static uint32_t num_eth_rcv = 0;      // counter of ethernet packets received
+static uint32_t num_eth_snd = 0;      // counter of ethernet packets sent
 
 // the time...
 static uint32_t time, frac;
 
+//===== Ethernet logging =====
+
+class LogEth : public Log {
+protected:
+  virtual void ethSend(uint8_t *buffer, uint8_t len) {
+    //Serial.print("LogEth::ethSend(");
+    //Serial.print(len);
+    //Serial.println(")");
+    ether.udpPrepare(msgClientPort, msgServer, msgClientPort);
+    uint8_t *ptr = gPB+UDP_DATA_P;
+
+    *ptr++ = LOG_MODULE;
+    *(uint32_t *)ptr = now();
+    ptr += 4;
+    memcpy(ptr, buffer, len);
+    ether.udpTransmit(len+5);
+    num_eth_snd++;
+  }
+};
+
+LogEth loggerEth;
+Log *logger = &loggerEth;
+
+// modules
+static Configured *(node_config[]) = {
+  &net, &loggerEth, 0
+};
+
 //===== ntp response with fractional seconds
-#define gPB ether.buffer
 
 byte ntpProcessAnswer(uint32_t *time, uint32_t *frac, byte dstport_l) {
   if ((dstport_l && gPB[UDP_DST_PORT_L_P] != dstport_l) || gPB[UDP_LEN_H_P] != 0 ||
@@ -36,59 +82,70 @@ byte ntpProcessAnswer(uint32_t *time, uint32_t *frac, byte dstport_l) {
   return 1;
 }
 
-//===== ethernet UDP printer =====
+//===== message from management server
 
-void eth_print(uint8_t nodeId, time_t t, const char *txt) {
-  ether.udpPrepare(msgClientPort, msgServer, msgClientPort);
-  char *ptr = (char *)gPB+UDP_DATA_P;
+byte msgProcessAnswer() {
+  uint8_t len = gPB[UDP_LEN_L_P];
+  if (gPB[UDP_DST_PORT_L_P] != (msgClientPort & 0xff) ||
+      gPB[UDP_DST_PORT_H_P] != (msgClientPort >> 8) ||
+      gPB[UDP_LEN_H_P] != 0 ||
+      len < 3 || len > RF12_MAXDATA+3)
+    return 0;
 
-  // print node ID
-  *ptr++ = '@';
-  *ptr++ = '0' + nodeId/10; *ptr++ = '0' + nodeId%10;
-  *ptr++ = ' ';
+  if (len != gPB[UDP_DATA_P+2]) {
+    logger->print(F("ETH: length mismatch "));
+    logger->print(len);
+    logger->print(" ");
+    logger->println(gPB[UDP_DATA_P+2]);
+    return 0;
+  }
 
-  // print date/time
-  *ptr++ = '0' + year(t)/1000%10; *ptr++ = '0' + year(t)/100%10;
-  *ptr++ = '0' + year(t)/10%10;   *ptr++ = '0' + year(t)%10;   *ptr++ = '/';
-  *ptr++ = '0' + month(t)/10;     *ptr++ = '0' + month(t)%10;  *ptr++ = '/';
-  *ptr++ = '0' + day(t)/10;       *ptr++ = '0' + day(t)%10;    *ptr++ = ' ';
-  *ptr++ = '0' + hour(t)/10;      *ptr++ = '0' + hour(t)%10;   *ptr++ = ':';
-  *ptr++ = '0' + minute(t)/10;    *ptr++ = '0' + minute(t)%10; *ptr++ = ':';
-  *ptr++ = '0' + second(t)/10;    *ptr++ = '0' + second(t)%10; *ptr++ = ' ';
+  uint8_t *pkt = net.alloc();
+  if (pkt) {
+    memcpy(pkt, gPB+UDP_DATA_P+3, len-3);
+    net.rawSend(len-3, gPB[UDP_DATA_P+1]);
+    num_rf12_snd++;
+  }
 
-  // print message
-  strcpy(ptr, txt);
-  ether.udpTransmit(strlen((char *)gPB+UDP_DATA_P));
-  //Serial.print((char*)gPB+UDP_DATA_P);
-  //if (txt[strlen(txt)-1] == '\n') Serial.print('\r');
+  return 1;
 }
 
+//===== dump memory =====
+#if 0
+void dumpMem(void) {
+  for (intptr_t a=0x0100; a<0x1000; a++) {
+    if ((a & 0xf) == 0) {
+      Serial.print("0x");
+      Serial.print(a, HEX);
+      Serial.print("  ");
+    }
+    Serial.print((*(uint8_t*)a)>>4, HEX);
+    Serial.print((*(uint8_t*)a)&0xF, HEX);
+    Serial.print(" ");
+    if ((a & 0xf) == 0xF) Serial.println();
+  }
+}
+#endif
+
 //===== setup & loop =====
-
-Net net(0xD4, true);  // default group_id and low power
-//Log logger;
-MilliTimer ntpTimer;
-BlinkPlug bl(4);
-
-static Configured *(node_config[]) = {
-  &net, 0
-};
 
 void setup() {
   Serial.begin(57600);
   Serial.println(F("***** SETUP: " __FILE__));
+  led.mode2(OUTPUT);    // yellow
+  led.digiWrite2(0);    // ON
+  led.mode(OUTPUT);
+  led.digiWrite(0);     // red
 
+  // Uncomment to reset EEPROM config
   //eeprom_write_word((uint16_t *)0x20, 0xDEAD);
-
-  bl.ledOff(3);
-  bl.ledOn(2);
 
   config_init(node_config);
   if (node_id != NET_GW_NODE) {
     net.setNodeId(NET_GW_NODE);
   }
   
-#if 0
+#if 1
   Serial.print("MAC: ");
   for (byte i = 0; i < 6; ++i) {
           Serial.print(mymac[i], HEX);
@@ -97,79 +154,93 @@ void setup() {
   Serial.println();
 #endif
 
-  if (ether.begin(sizeof Ethernet::buffer, mymac) == 0)
-          Serial.println( "Failed to access Ethernet controller");
-
-  for (;;) {
-    Serial.println("Setting up DHCP");
-    if (ether.dhcpSetup()) break;
-    Serial.println( "DHCP failed");
+  while (ether.begin(sizeof Ethernet::buffer, mymac) == 0) {
+    Serial.println(F("Failed to access Ethernet controller"));
+    delay(1000);
   }
-
-  ether.printIp("My IP: ", ether.myip);
-  //ether.printIp("Netmask: ", ether.mymask);
-  //ether.printIp("GW IP: ", ether.gwip);
-  //ether.printIp("DNS IP: ", ether.dnsip);
-
-  bl.ledOff(2);
   
-  ntpTimer.poll(1000);
+  ntpTimer.poll(1000);    // get the ntp timer going
 
   Serial.println(F("***** RUNNING: " __FILE__));
+  led.mode2(INPUT);       // turn yellow off
 }
 
 void loop() {
+
   // Send an NTP time request
-  if (ntpTimer.poll(5000)) {
+  if (ether.isLinkUp() && ntpTimer.poll(5000)) {
     ether.ntpRequest(ntpServer, ntpClientPort);
     //Serial.println("Sending NTP request");
-    bl.ledOff(1);
+  }
+
+  // Check DHCP state frequently if we have no IP, infrequently if we do
+  if (ether.myip[0]) {
+    if (dhcpTimer.poll(29000)) {
+      EtherCard::DhcpStateMachine(0);
+      // announce myself to management server
+      ether.sendUdp(msgSelf, sizeof(msgSelf), msgClientPort, msgServer, msgClientPort);
+      num_eth_snd++;
+      ether.printIp(F("IP addr: "), ether.myip);
+    }
+  } else if (dhcpTimer.poll(500)) {
+    // no IP address: move DHCP along!
+    EtherCard::DhcpStateMachine(0);
+    ether.printIp(F("IP addr: "), ether.myip);
+  }
+
+  if (dhcpTimer.poll(ether.myip[0] ? 29000 : 500)) {
+    EtherCard::DhcpStateMachine(0);
+    ether.printIp(F("IP addr: "), ether.myip);
   }
 
   // Keep rf12 moving
   if (net.poll()) {
-    Serial.print("Packet: module=");
-    Serial.print(*(uint8_t*)rf12_data);
-    Serial.print(" len=");
-    Serial.println(rf12_len);
-#if 0
-    switch (pkt->hdr.type) {
-    case net_time:
-      // ignore
-      break;
-    case net_msg:
-      // send message onwards on ethernet
-      char msg[RF12_MAXDATA];
-      uint8_t len;
-      len = rf12_len - 5; // yuck
-      memcpy(msg, pkt->msg.txt, len);
-      msg[len] = 0;
-      eth_print(rf12_hdr & RF12_HDR_MASK, pkt->msg.time, msg);
-      break;
-    default:
-      Serial.print("Unknown packet type hdr=");
-      Serial.print(rf12_hdr,16);
-      Serial.print(" len=");
-      Serial.print(rf12_len);
-      Serial.print(" -- ");
-      for (int i=0; i<10; i++) {
-        Serial.print(rf12_data[i]);
-        Serial.print("/");
-        Serial.print((char)rf12_data[i]);
-        Serial.print(" ");
-      }
-      Serial.println();
-      break;
+    logger->print(F("RF12 RCV packet: hdr=0x"));
+    logger->print(rf12_hdr, HEX);
+    logger->print(F(" module="));
+    logger->print(*(uint8_t*)rf12_data);
+    logger->print(F(" len="));
+    logger->print(rf12_len);
+    num_rf12_rcv++;
+    
+    // Forward packets to management server
+    if ((rf12_hdr & ~RF12_HDR_ACK) == (RF12_HDR_DST|NET_GW_NODE)) {
+      logger->println(F(" to mgmnt server"));
+      ether.sendUdp((char *)rf12_buf, rf12_len+3, msgClientPort, msgServer, msgClientPort);
+      num_eth_snd++;
+    } else if (rf12_hdr == NET_UNINIT_NODE) {
+      logger->print(F(" announce id=0x"));
+      logger->print(*(uint8_t*)rf12_data);
+      logger->print(F(" crc=0x"));
+      logger->println(*(uint16_t*)(rf12_data+1));
+      ether.sendUdp((char *)rf12_buf, rf12_len+3, msgClientPort, msgServer, msgClientPort);
+      num_eth_snd++;
+    } else {
+      logger->println();
     }
-#endif
   }
   
   // Receive ethernet packets
   int plen = ether.packetReceive();
   ether.packetLoop(plen);
-  if (plen > 0) {
+
+  if (plen > 42 &&       // minimum UDP packet length
+      gPB[ETH_TYPE_H_P] == ETHTYPE_IP_H_V &&
+      gPB[ETH_TYPE_L_P] == ETHTYPE_IP_L_V &&
+      gPB[IP_PROTO_P] == IP_PROTO_UDP_V)
+  {
+    num_eth_rcv++;
+
+    // Handle DHCP packets
+#   define DHCP_SRC_PORT 67
+    if (gPB[UDP_SRC_PORT_L_P] == DHCP_SRC_PORT) {
+      EtherCard::DhcpStateMachine(plen);
+
+    // Handle management server packets
+    } else if (msgProcessAnswer()) {
+
     // Check for NTP responses and forward time
-    if (ntpProcessAnswer(&time, &frac, ntpClientPort)) {
+    } else if (ntpProcessAnswer(&time, &frac, ntpClientPort)) {
       // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
       const unsigned long seventyYears = 2208988800UL;     
       // subtract seventy years:
@@ -177,40 +248,48 @@ void loop() {
 
       // set local clock
       setTime(time);
-      bl.ledOn(1);
+      led.mode2(OUTPUT);       // turn yellow on
 
       // Try to send it once on the rf12 radio (don't let it get stale)
       if (rf12_canSend()) {
         struct net_time { uint8_t module; uint32_t time; } tbuf = { NETTIME_MODULE, time };
         rf12_sendStart(NET_GW_NODE, &tbuf, sizeof(tbuf));
-        eth_print(node_id, time, "Sent time update\n");
+        num_rf12_snd++;
+        logger->println(F("Sent time update"));
       } else {
-        eth_print(node_id, time, "Cannot send time update\n");
+        logger->println(F("Cannot send time update"));
       }
 
       // print the time
       time_t t = now();
-      Serial.print("The time is: ");
-      Serial.print(time);
-      Serial.print('.');
-      Serial.print(frac);
-      Serial.print(" = ");
-      Serial.print(month(t));
-      Serial.print('/');
-      Serial.print(day(t));
-      Serial.print('/');
-      Serial.print(year(t));
-      Serial.print(' ');
-      Serial.print(hour(t));
-      Serial.print(':');
-      Serial.print(minute(t));
-      Serial.print(':');
-      Serial.print(second(t));
-      Serial.println();
+      logger->print("The time is: ");
+      logger->print(time);
+      logger->print('.');
+      logger->print(frac);
+      logger->print(" = ");
+      logger->print(month(t));
+      logger->print('/');
+      logger->print(day(t));
+      logger->print('/');
+      logger->print(year(t));
+      logger->print(' ');
+      logger->print(hour(t));
+      logger->print(':');
+      logger->print(minute(t));
+      logger->print(':');
+      logger->print(second(t));
+      logger->println();
     }
   }
-  
+
+  // Set LEDs
+  led.digiWrite2(num_rf12_rcv & 1);   // toggle green with rf12 rcv
+  if (ether.myip[0]) {
+    led.digiWrite(1);                 // green (on or off)
+    led.mode(num_eth_rcv & 1);        // toggle with eth rcv
+  } else {
+    led.mode(OUTPUT);                 // no IP: force red on
+    led.digiWrite(0);
+  }
   
 }
-
-

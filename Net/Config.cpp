@@ -6,7 +6,6 @@
 #include <util/crc16.h>
 #include <avr/eeprom.h>
 #include <Config.h>
-#include <Log.h>
 
 #define DEBUG 0
 

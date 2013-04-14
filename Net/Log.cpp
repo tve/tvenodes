@@ -1,6 +1,7 @@
 // Copyright (c) 2013 Thorsten von Eicken
 //
 // Logging class
+//
 
 #include <JeeLib.h>
 #include <Config.h>
@@ -25,11 +26,14 @@ void Log::send(void) {
 
 	// Log to the serial port
 	if (config.serial) {
+		//Serial.print("LOG:");
 		Serial.print((char *)buffer);
+		if (ix > 0 && buffer[ix-1] == '\n')
+			Serial.print('\r');
 	}
 
 	// Log to the network
-	if (config.net) {
+	if (config.rf12) {
 		uint8_t *pkt = net.alloc();
 		if (pkt) {
 			*pkt = LOG_MODULE;
@@ -43,6 +47,11 @@ void Log::send(void) {
 		}
 	}
 
+	// Log to ethernet
+	if (config.eth) {
+		ethSend(buffer, ix);
+	}
+
 	// Log to the LCD
 #if LCD
 	if (config.lcd) {
@@ -52,10 +61,12 @@ void Log::send(void) {
 	ix = 0;
 }
 
+void Log::ethSend(uint8_t *buffer, uint8_t len) { }
+
 // write a character to the buffer, used by Print but can also be called explicitly
 // automatically sends the buffer when it's full or a \n is written
 size_t Log::write (uint8_t v) {
-	if (ix >= LOG_MAX) send();
+	if (ix >= LOG_MAX) { send(); }
 	buffer[ix++] = v;
 	if (v == 012) send();
 	return 1;
@@ -73,12 +84,15 @@ void Log::applyConfig(uint8_t *cf) {
   } else {
     memset(&config, 0, sizeof(log_config));
     config.serial = 1;
+    //config.eth = 1;
     config_write(LOG_MODULE, &config);
   }
   Serial.print(F("Config Log:"));
   if (config.serial) Serial.print(F(" serial"));
   if (config.lcd) Serial.print(F(" lcd"));
-  if (config.net) Serial.print(F(" net"));
+  if (config.rf12) Serial.print(F(" rf12"));
+  if (config.eth) Serial.print(F(" eth"));
   if (config.time) Serial.print(F(" time"));
   Serial.println();
 }
+
