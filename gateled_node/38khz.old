@@ -1,0 +1,46 @@
+int ledPin = 6;
+
+void setup() {
+  pinMode(ledPin, OUTPUT);
+  Serial.begin(57600);
+  Serial.println("Hello!");
+}
+void burst() {
+  long int d = 8;
+  for (long int i=0; i<10; i++) {
+    digitalWrite(ledPin, HIGH);
+    delayMicroseconds(d);
+    digitalWrite(ledPin, LOW);
+    delayMicroseconds(d+1);
+  }
+  delay (36);
+}
+/*void myTone(long int freq) {
+  unsigned long t = millis();
+  long int d = 1000000/freq/2/3;
+  d = 8;
+  for (long int i=0; i<freq; i++) {
+    digitalWrite(ledPin, HIGH);
+    delayMicroseconds(d);
+    digitalWrite(ledPin, LOW);
+    delayMicroseconds(d+1);
+  }
+  t = millis() - t;
+  Serial.print("myTone ");
+  Serial.print(freq);
+  Serial.print("Hz took ");
+  Serial.print(t);
+  Serial.print("ms d=");
+  Serial.print(d);
+  Serial.println();
+  delay (100);
+}
+*/
+
+void loop() {
+//tone(ledPin, 10);
+//delay (1000);
+//noTone(ledPin);
+burst ();
+}
+

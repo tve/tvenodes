@@ -95,15 +95,22 @@ void config_init(Configured **cf) {
 	}
 }
 
-void config_dispatch(void) {
-  if (rf12_len < 1) return;
-  uint8_t module = rf12_data[0];
+void config_dispatch(volatile uint8_t *data, uint8_t len) {
+  // if data=0 then no args were supplied: use rf12 buffer as default
+  if (data == 0) {
+    data = rf12_data;
+    len = rf12_len;
+  }
+
+  // we need at least one byte for module_id
+  if (len < 1) return;
+  uint8_t module = data[0];
 
 	// iterate through modules and dispatch to correct one
 	for (uint8_t i=0; i<config_cnt; i++) {
 		uint8_t m = configs[i]->moduleId;
 		if (m == module) {
-      configs[i]->receive(rf12_data+1, rf12_len-1);
+      configs[i]->receive(data+1, len-1);
       return;
 		}
 	}

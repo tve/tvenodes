@@ -35,7 +35,7 @@ void OwTemp::init(byte pin, uint8_t count) {
   moduleId = OWTEMP_MODULE;
   configSize = sizeof(uint64_t)*sensCount;
 #if DEBUG
-	Serial.print("OwTemp: count=");
+	Serial.print("OWT: count=");
 	Serial.print(sensCount);
 	Serial.print(" configSize=");
 	Serial.print(configSize);
@@ -53,7 +53,7 @@ uint8_t OwTemp::setup(Print *printer) {
   byte n_found = 0;                // number of sensors actually discovered
 
 #if DEBUG
-  printer->print(F("OwTemp setup starting with:"));
+  printer->print(F("OWT <EEPROM:"));
   for (byte s=0; s<sensCount; s++) {
     printer->print(" ");
     printAddr(printer, sensAddr[s]);
@@ -72,7 +72,11 @@ uint8_t OwTemp::setup(Print *printer) {
     // see whether we know this sensor already
     for (byte s=0; s<sensCount; s++) {
       if (addr == sensAddr[s]) {
-        printer->print("    found #"); Serial.println(s);
+#       if DEBUG
+        printer->print("OWT: found #");
+        printAddr(printer, addr);
+        printer->println();
+#       endif
         found |= (uint16_t)1 << s;  // mark sensor as found
         goto cont;
       }
@@ -82,7 +86,11 @@ uint8_t OwTemp::setup(Print *printer) {
     for (byte s=0; s<sensCount; s++) {
       if (sensAddr[s] == 0) {
         sensAddr[s] = addr;
-        printer->print("    added #"); Serial.println(s);
+#       if DEBUG
+        printer->print("OWT: new #");
+        printAddr(printer, addr);
+        printer->println();
+#       endif
         added |= (uint16_t)1 << s;  // mark sensor as added
         break;
       }
@@ -99,7 +107,7 @@ uint8_t OwTemp::setup(Print *printer) {
 
   // print info about additional sensors found
   if (added) {
-    printer->print(F("OwTemp New sensors:    "));
+    printer->print(F("OWT: New sensors:    "));
     for (byte s=0; s<sensCount; s++) {
       if (added & ((uint16_t)1 << s)) {
         printer->print(" ");
@@ -112,7 +120,7 @@ uint8_t OwTemp::setup(Print *printer) {
   // print info about missing sensors
   uint16_t missing = (((uint16_t)1 << sensCount)-1) & ~(found | added);
   if (missing) {
-    printer->print(F("OwTemp Missing sensors:"));
+    printer->print(F("OWT: Missing sensors:"));
     for (byte s=0; s<sensCount; s++) {
       if (missing & ((uint16_t)1 << s)) {
         printer->print(" ");
@@ -122,7 +130,7 @@ uint8_t OwTemp::setup(Print *printer) {
     printer->println();
   }
 
-  printer->print(F("OwTemp ready with "));
+  printer->print(F("OWT: ready with "));
   printer->print(sensCount);
   printer->println(F(" sensors"));
 
@@ -167,6 +175,7 @@ bool OwTemp::loop(uint8_t secs) {
       if (now - lastConv > OWTEMP_CONVTIME) {
         // time to read the results
         for (byte s=0; s<sensCount; s++) {
+          if (sensAddr[s] == 0) continue;
           float t = read(sensAddr[s]);
           uint16_t bit = (uint16_t)1 << s;
           if (isnan(t)) {
@@ -183,18 +192,18 @@ bool OwTemp::loop(uint8_t secs) {
             sensTemp[s] = t;
             // update min/max
             int8_t m = (int8_t)(round(t)-TEMP_OFFSET);
-            Serial.print("Min: "); Serial.print(m+TEMP_OFFSET); Serial.print(" ");
-            Serial.print(sensMin[s][0]+TEMP_OFFSET); Serial.print(" ");
-            Serial.println(m < sensMin[s][0]);
+            //Serial.print("Min: "); Serial.print(m+TEMP_OFFSET); Serial.print(" ");
+            //Serial.print(sensMin[s][0]+TEMP_OFFSET); Serial.print(" ");
+            //Serial.println(m < sensMin[s][0]);
             if (sensMin[s][5] == -128)
               memset(sensMin[s], m, 6); // sensMin is uninitialized so set it all
             else if (m < sensMin[s][0])
               sensMin[s][0] = m;        // new minimum
-            Serial.print("Max: "); Serial.print(m+TEMP_OFFSET); Serial.print(" ");
-            Serial.print(sensMax[s][0]+TEMP_OFFSET); Serial.print(" ");
-            Serial.println(m > sensMax[s][0]);
+            //Serial.print("Max: "); Serial.print(m+TEMP_OFFSET); Serial.print(" ");
+            //Serial.print(sensMax[s][0]+TEMP_OFFSET); Serial.print(" ");
+            //Serial.println(m > sensMax[s][0]);
             if (sensMax[s][5] == -128)
-              memset(sensMax[s], m, 6); // sensMaxin is uninitialized so set it all
+              memset(sensMax[s], m, 6); // sensMax is uninitialized so set it all
             else if (m > sensMax[s][0])
               sensMax[s][0] = m;        // new maximum
           }
@@ -269,7 +278,8 @@ void OwTemp::printAddrRev(Print *printer, uint64_t addr) {
 void OwTemp::printAddr(Print *printer, uint64_t addr) {
   uint8_t *a = (uint8_t *)&addr;
   printer->print("0x");
-  for (byte b=0; b<8; b++) {
+  // print only the top 3 bytes, the rest is always 31010000 (at least for me)
+  for (byte b=0; b<3; b++) {
     printer->print(*a >> 4, HEX);
     printer->print(*a & 0xF, HEX);
     a++;
@@ -285,21 +295,23 @@ void OwTemp::printDebug(Print *printer) {
   printer->println(minMaxCount);
 
   for (uint8_t s=0; s<sensCount; s++) {
-    printer->print("#");
+    printer->print("  #");
     printer->print(s);
     printer->print(": ");
     printAddr(printer, sensAddr[s]);
-    printer->print(" now:");
-    printer->print(sensTemp[s]);
-    printer->print("F min:");
-    for (uint8_t i=0; i<6; i++) {
-      printer->print((int16_t)(sensMin[s][i])+TEMP_OFFSET);
-      printer->print(",");
-    }
-    printer->print(F(" max:"));
-    for (uint8_t i=0; i<6; i++) {
-      printer->print((int16_t)(sensMax[s][i])+TEMP_OFFSET);
-      printer->print(",");
+    if (sensAddr[s] != 0) { 
+      printer->print(" now:");
+      printer->print(sensTemp[s]);
+      printer->print("F min:");
+      for (uint8_t i=0; i<6; i++) {
+        printer->print((int16_t)(sensMin[s][i])+TEMP_OFFSET);
+        printer->print(",");
+      }
+      printer->print(F(" max:"));
+      for (uint8_t i=0; i<6; i++) {
+        printer->print((int16_t)(sensMax[s][i])+TEMP_OFFSET);
+        printer->print(",");
+      }
     }
     printer->println();
   }
@@ -312,7 +324,9 @@ void OwTemp::applyConfig(uint8_t *cf) {
     if (sensAddr[0] == 0) {
       // address array is empty -> restore from EEPROM
       memcpy(sensAddr, cf, sizeof(uint64_t)*sensCount);
+#     if DEBUG
       Serial.println(F("Config OwTemp: restored addrs from EEPROM"));
+#     endif
     }
   } else {
     // no valid config in EEPROM, leave sensor address array as-is

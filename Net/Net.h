@@ -18,7 +18,9 @@ typedef struct {
   uint8_t   len;
   uint8_t   data[RF12_MAXDATA];
 } net_packet;
-#define NET_PKT        3                // number of packet buffers allocated
+#ifndef NET_PKT
+#define NET_PKT        2                // number of packet buffers allocated
+#endif
 
 // Global variables that are managed by the network module
 extern bool node_enabled;       // global variable that enables/disables all code modules
@@ -27,24 +29,28 @@ extern uint8_t node_id;         // this node's rf12 ID
 class Net : public Configured {
   // variables related to sending packets
   net_packet buf[NET_PKT];      // buffer for outgoing packets
-  uint8_t bufcnt;               // number of outgoing packets in buffer
+  uint8_t bufCnt;               // number of outgoing packets in buffer
   uint8_t sendCnt;              // number of transmissions of last packet
   uint32_t sendTime;            // when last packet was sent (for retries)
   uint8_t queuedAck;            // header of queued ACK
+  uint8_t queuedRssi;           // RSSI being sent back with ACK
 
   // variables related to initialization
-  uint8_t init_id;              // node id used in announcement&init packets
-  uint16_t init_crc;            // crc of configuration sent in init packet
-  uint32_t init_at;             // when last init packet was sent
+  uint16_t nodeUuid;            // uuid sent in init packet
+  uint32_t initAt;              // when last init packet was sent, 0 when initialized
   uint8_t group_id;             // rf12 group ID
   bool lowPower;                // whether to reduce tx power and rx gain
 
   void doSend(void);
-  void sendAck(byte nodeId);
+  void getRssi(void);
+  void queueAck(byte nodeId);
   void announce(void);
   void handleInit(void);
 
 public:
+  uint8_t lastAckRssi;          // RSSI received in the last ACK
+  uint8_t lastRcvRssi;          // RSSI of the last received packet
+
   // Constructor, doesn't init any HW yet; the HW is configured by applyConfig() which is
   // called by the EEPROM config system after the EEPROM is read
   // @group_id is the rf12 group_id to use
@@ -74,6 +80,8 @@ public:
   // send and receive)
   // @return the first byte (module_id) of a received packet, 0 when there's no packet
   uint8_t poll(void);
+
+  void reXmit(void);
 
   // Configuration methods
 	virtual void applyConfig(uint8_t *);

@@ -9,7 +9,7 @@
 #include <Config.h>
 
 // Assumes JeeLib.h is included for rf12 constants
-#define LOG_MAX (RF12_MAXDATA-5)		// max amount of chars that can be logged in one packet
+#define LOG_MAX (RF12_MAXDATA-1)		// max amount of chars that can be logged in one packet
 
 class Log : public Print, public Configured {
 private:
@@ -23,7 +23,7 @@ private:
   } log_config;
 
   log_config config;
-  uint8_t buffer[LOG_MAX+1];
+  uint8_t buffer[LOG_MAX+1]; // +1 for null byte string termination
   uint8_t ix;
 
 	// send accumulated buffer

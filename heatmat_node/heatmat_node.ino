@@ -1,5 +1,5 @@
 // Copyright (c) 2013 by Thorsten von Eicken
-// Seedling misting and lighting node
+// Heatmat node
 //   Relay plug
 // Functions:
 //   - 
@@ -54,42 +54,29 @@ void find_temp() {
 }
 #endif
 
-//===== misting timer =====
+//===== heatmat control =====
 
-uint16_t onTime = 10;         // seconds misting is on
-uint16_t offTime = 10*60;     // seconds misting is off
-uint8_t  onTemp = 70;         // above which temp to turn misting on (in F)
-bool     onNow = false;       // whether misting is on now
-time_t   onDly = 0;           // delay until switching
+uint8_t  onTemp = 70;         // below which temp to turn heatmat on
+bool     onNow = false;       // whether heatmat is on now
 
 Port relay(RLY_PORT);
 
-void setup_misting() {
+void setup_heatmat() {
     relay.digiWrite(0);
     relay.mode(OUTPUT);
     relay.digiWrite2(0);
     relay.mode2(OUTPUT);
 }
 
-void loop_misting() {
+void loop_heatmat() {
   float temp = owTemp.get(0);
   if (isnan(temp)) return;
-  if (timeStatus() != timeSet) return;
 
-  time_t t = now() % (time_t)(onTime+offTime);
-  bool on = t < (uint32_t)onTime;
-
-  if (!onNow && on) {
-    // off->on transition only if the temperature is high enough
-    on = temp > onTemp;
-  }
-
-  onDly = on ? (time_t)onTime - t : (time_t)(onTime+offTime) - t;
-
+  bool on = (uint8_t)temp < onTemp;
   if (on != onNow) {
     relay.digiWrite(on);
     relay.mode(OUTPUT);
-    logger->print("Turning misting ");
+    logger->print("Turning heatmat ");
     logger->println(on ? "on" : "off");
     onNow = on;
   }
@@ -105,7 +92,7 @@ void setup() {
   Serial.begin(57600);
   Serial.println(F("***** SETUP: " __FILE__));
 
-  //eeprom_write_word((uint16_t *)0x20, 0xF00D); // reset EEPROM content
+  eeprom_write_word((uint16_t *)0x20, 0xF00D); // reset EEPROM content
 
   config_init(node_config);
 
@@ -115,7 +102,7 @@ void setup() {
 # endif
   
   owTemp.setup((Print*)logger);
-  setup_misting();
+  setup_heatmat();
   notSet.set(1000);
   logger->println(F("***** RUNNING: " __FILE__));
 }
@@ -133,6 +120,7 @@ void loop() {
 
   owTemp.loop(TEMP_PERIOD);
 
+#if 0
   // If we don't know the time of day, just sit there and wait for it to be set
   if (timeStatus() != timeSet) {
     if (notSet.poll(60000)) {
@@ -142,9 +130,10 @@ void loop() {
     }
     return;
   }
+#endif
 
   // Main functionality
-  loop_misting();
+  loop_heatmat();
 
   // Update the time display on the LCD
 #ifdef USE_LCD
@@ -159,7 +148,6 @@ void loop() {
     } else {
       lcd.print("OFF ");
     }
-    lcd.print(onDly);
 
     t = now();
     char div = second(t) & 1 ? ':' : '\xA5';

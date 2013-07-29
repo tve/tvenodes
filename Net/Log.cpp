@@ -9,8 +9,7 @@
 #include <Time.h>
 #include <Log.h>
 
-#define LCD		1  	// support logging to the LCD (set to 0 to exclude that code)
-#define TIME	1		// support logging the time (set to 0 to exclude that code)
+#define LCD		0  	// support logging to the LCD (set to 0 to exclude that code)
 
 // constructor
 Log::Log(void) {
@@ -33,18 +32,16 @@ void Log::send(void) {
 	}
 
 	// Log to the network
-	if (config.rf12) {
+	if (config.rf12 && node_id != NET_GW_NODE) {
 		uint8_t *pkt = net.alloc();
+    //while (!pkt) { (void)net.poll(); pkt = net.alloc(); }
 		if (pkt) {
 			*pkt = LOG_MODULE;
-#if TIME
-			*(uint32_t *)(pkt+1) = now();
-#else
-			*(uint32_t *)(pkt+1) = 0;
-#endif
-			memcpy(pkt+5, buffer, ix);
-			net.send(ix+5); // +5 for module_id byte and for time
-		}
+			memcpy(pkt+1, buffer, ix);
+			net.send(ix+1, true); // +1 for module_id byte
+		} else {
+      //Serial.println(F("Log: out of rf12 buffers"));
+    }
 	}
 
 	// Log to ethernet
@@ -84,7 +81,7 @@ void Log::applyConfig(uint8_t *cf) {
   } else {
     memset(&config, 0, sizeof(log_config));
     config.serial = 1;
-    //config.eth = 1;
+    config.rf12 = 1;
     config_write(LOG_MODULE, &config);
   }
   Serial.print(F("Config Log:"));

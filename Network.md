@@ -61,31 +61,42 @@ In order to detect code module changes that require reconfiguration the node sto
 Packet structure
 ----------------
 
-There are 6 classes of packets:
- 1. Node announcement packets
- 1. Node initialization packets
+There are 3 classes of packets:
  1. Packets from a node to the management server
  1. Packets from the management server to a node
- 1. Inter-node Broadcasts
  1. Acknowledgement packets
 
 The packets have the following format:
 
 ````
-
               +-----+-----------+-----+---------+----------------------------+
               | CTL | DST       | ACK | Node_id | Payload                    |
               +-----+-----------+-----+---------+----------------------------+
-Announcement: |  0  | 0=bcast   |  0  | 31      | node_id | 16-bit CRC | ... |
-              +-----+-----------+-----+---------+----------------------------+
-Init          |  0  | 0=bcast   |  0  | 31      | node_id | 16-bit CRC | ... |
-              +-----+-----------+-----+---------+----------------------------+
-To mgmt srv   |  0  | 1=unicast | 0/1 | 1 (gw)  | code module id | ...       |
+To mgmt srv   |  0  | 0=bcast   | 0/1 | source  | code module id | ...       |
               +-----+-----------+-----+---------+----------------------------+
 From mgmt srv |  0  | 1=unicast | 0/1 | target  | code module id | ...       |
-              +-----+-----------+-----+---------+----------------------------+
-Broadcast     |  0  | 0=bcast   |  0  | source  | code module id | ...       |
               +-----+-----------+-----+---------+----------------------------+
 ACK           |  1  | 1=unicast |  0  | target  | null                       |
               +-----+-----------+-----+---------+----------------------------+
 ````
+
+Node initialization packets
+---------------------------
+
+Nodes send out announcement packets frequently (every second) when they first boot until
+they receive a corresponding intialization packet. The packet structure is:
+ - DST=0 (bcast)
+ - ACK=0 (no ACK)
+ - Node_id=30/self (30 if EEPROM is not initialized, node_id from EEPROM otherwise)
+ - module=0 (net_module)
+ - 16-bit node uuid (generated randomly and stored in EEPROM)
+
+The packet structure of the initialization packet sent as response from the management
+server is:
+ - DST=1 (unicast)
+ - ACK=0
+ - Node_id=same as in announcement
+ - module=0
+ - 16-bit node uuid, same as in announcement
+ - 8-bit new node id
+ - 8-bit enable flag (0=disable node, 1-enable node, 2-use value in EEPROM)
