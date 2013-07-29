@@ -61,8 +61,10 @@ In order to detect code module changes that require reconfiguration the node sto
 Packet structure
 ----------------
 
-There are 3 classes of packets:
- 1. Packets from a node to the management server
+There are 5 classes of packets:
+ 1. Node announcement packets
+ 1. Node initialization packets
+ 1. Packets from a node to the management server (and possibly to other nodes)
  1. Packets from the management server to a node
  1. Acknowledgement packets
 
@@ -72,9 +74,13 @@ The packets have the following format:
               +-----+-----------+-----+---------+----------------------------+
               | CTL | DST       | ACK | Node_id | Payload                    |
               +-----+-----------+-----+---------+----------------------------+
-To mgmt srv   |  0  | 0=bcast   | 0/1 | source  | code module id | ...       |
+Announcement: |  0  | 0=bcast   |  0  | 30      | node_id | 16-bit CRC | ... |
+              +-----+-----------+-----+---------+----------------------------+
+Init          |  0  | 0=bcast   |  0  | 30      | node_id | 16-bit CRC | ... |
               +-----+-----------+-----+---------+----------------------------+
 From mgmt srv |  0  | 1=unicast | 0/1 | target  | code module id | ...       |
+              +-----+-----------+-----+---------+----------------------------+
+To mgmt srv   |  0  | 0=bcast   |  0  | source  | code module id | ...       |
               +-----+-----------+-----+---------+----------------------------+
 ACK           |  1  | 1=unicast |  0  | target  | null                       |
               +-----+-----------+-----+---------+----------------------------+
