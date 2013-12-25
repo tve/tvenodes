@@ -259,6 +259,7 @@ CPPFLAGS += -funsigned-char -funsigned-bitfields -fpack-struct -fshort-enums
 CPPFLAGS += -mmcu=$(BOARD_BUILD_MCU)
 CPPFLAGS += -DF_CPU=$(BOARD_BUILD_FCPU) -DARDUINO=$(ARDUINOCONST)
 CPPFLAGS += -DUSB_VID=$(BOARD_USB_VID) -DUSB_PID=$(BOARD_USB_PID)
+CPPFLAGS += $(LOCALFLAGS)
 CPPFLAGS += -I. -Iutil -Iutility -I $(ARDUINOCOREDIR)
 CPPFLAGS += -I $(ARDUINODIR)/hardware/arduino/variants/$(BOARD_BUILD_VARIANT)/
 CPPFLAGS += $(addprefix -I ../, $(LOCALLIBS))
@@ -300,7 +301,11 @@ upload: target
 	@test 0 -eq $(SERIALDEVGUESS) || { \
 		echo "*GUESSING* at serial device:" $(SERIALDEV); \
 		echo; }
+ifeq (,$(findstring net:,$(SERIALDEV)))
 	stty $(STTYFARG) $(SERIALDEV) hupcl
+else
+	nc -z $(subst :, ,$(subst net:,,$(SERIALDEV)))
+endif
 	$(AVRDUDE) $(AVRDUDEFLAGS) -U flash:w:$(TARGET).hex:i
 
 clean:

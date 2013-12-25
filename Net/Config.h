@@ -11,6 +11,8 @@
 #define LOG_MODULE	    2
 #define NETTIME_MODULE  3
 #define OWTEMP_MODULE   4
+#define OWRELAY_MODULE  5
+#define OWSCAN_MODULE   6
 
 class Configured {
 public:

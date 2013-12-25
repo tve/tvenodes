@@ -209,7 +209,7 @@ void loop() {
   // Every few seconds send an NTP time request
   if (ethReady && ntpTimer.poll(5000)) {
     ether.ntpRequest(ntpServer, ntpClientPort);
-    //Serial.println("Sending NTP request");
+    Serial.println("Sending NTP request");
   }
 
   // Debug printout if we're not connected

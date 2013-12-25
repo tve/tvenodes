@@ -48,8 +48,8 @@ void config_init(Configured **cf) {
 		uint8_t sz = cf[i]->configSize;
 		if (sz > EEPROM_MAX) {
       Serial.println();
-			Serial.print(F("CONFIG: the size of the config for the "));
-      Serial.print(i+1); Serial.print(F("th module is too large ("));
+			Serial.print(F("CONFIG: the config for module #"));
+      Serial.print(i+1); Serial.print(F(" is too large ("));
 			Serial.print(sz); Serial.print(F(" vs. "));
       Serial.print(EEPROM_MAX); Serial.println(F(" max)"));
 			continue;

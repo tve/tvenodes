@@ -1,0 +1,2 @@
+setportcontrol 2000 RTSLO
+setportcontrol 2000 RTSHI

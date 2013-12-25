@@ -11,8 +11,21 @@
 
 #define LCD		0  	// support logging to the LCD (set to 0 to exclude that code)
 
-// constructor
 Log::Log(void) {
+	init();
+#ifdef LOG_NORF12B
+	this->defaults = (log_config){1, 0, 0, 0, 0};  // serial only
+#else
+	this->defaults = (log_config){1, 0, 1, 0, 0};  // serial and rf12b
+#endif
+}
+
+Log::Log(log_config defaults) {
+	init();
+	this->defaults = defaults;
+}
+
+void Log::init() {
 	ix = 0;
   moduleId = LOG_MODULE;
   configSize = sizeof(log_config);
@@ -31,6 +44,7 @@ void Log::send(void) {
 			Serial.print('\r');
 	}
 
+#ifndef LOG_NORF12B
 	// Log to the network
 	if (config.rf12 && node_id != NET_GW_NODE) {
 		uint8_t *pkt = net.alloc();
@@ -43,6 +57,7 @@ void Log::send(void) {
       //Serial.println(F("Log: out of rf12 buffers"));
     }
 	}
+#endif
 
 	// Log to ethernet
 	if (config.eth) {
@@ -80,8 +95,7 @@ void Log::applyConfig(uint8_t *cf) {
     //Serial.println(*cf, HEX);
   } else {
     memset(&config, 0, sizeof(log_config));
-    config.serial = 1;
-    config.rf12 = 1;
+		config = defaults;
     config_write(LOG_MODULE, &config);
   }
   Serial.print(F("Config Log:"));
@@ -90,6 +104,7 @@ void Log::applyConfig(uint8_t *cf) {
   if (config.rf12) Serial.print(F(" rf12"));
   if (config.eth) Serial.print(F(" eth"));
   if (config.time) Serial.print(F(" time"));
+	if (*(uint8_t*)&config == 0) Serial.print(F(" !NONE! "));
   Serial.println();
 }
 

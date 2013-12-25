@@ -13,6 +13,12 @@
 // node 0: reserved for OOK
 // node 31: reserved for receive-all-packets
 
+// compile-time definitions to select network implementation
+// valid values: NET_NONE, NET_RF12B, NET_SERIAL
+#if !defined(NET_NONE) && !defined(NET_SERIAL)
+#define NET_RF12B
+#endif
+
 #define RF12_19K
 #ifdef RF12_19K
 // 19Kbps => BW:67khz, dev:45Khz
@@ -26,6 +32,16 @@
 #include <Config.h>
 #include <Net.h>
 #include <Time.h>
+
+#ifdef NET_SERIAL
+#include <Base64.h>
+#include <util/crc16.h>
+#endif
+
+// Serial Proto States
+#define SPS_IDLE   0
+#define SPS_START  1 // got start character, reading length
+#define SPS_DATA   3 // got length, reading data
 
 // Packet buffers and retries
 #define NET_RETRY_MS 100
@@ -48,20 +64,29 @@ typedef struct {
 
 // Allocate a packet buffer and return a pointer to it
 uint8_t *Net::alloc(void) {
+#ifndef NET_NONE
 	if (!node_enabled || node_id == NET_UNINIT_NODE) return 0;
   if (bufCnt < NET_PKT) return buf[bufCnt].data;
+#endif
   return 0;
 }
 
 // send the packet at the top of the queue
 void Net::doSend(void) {
+#ifndef NET_NONE
+	return;
+#else
   if (bufCnt > 0) {
     uint8_t hdr = buf[0].hdr;
     // Don't ask for an ACK on the last retry
     if (sendCnt+1 >= NET_RETRY_MAX)
       hdr &= ~RF12_HDR_ACK;
     // send as broadcast packet without ACK
+#ifdef NET_RF12B
     rf12_sendStart(hdr, &buf[0].data, buf[0].len);
+#elifdef NET_SERIAL
+#endif
+
 #if DEBUG
     Serial.print(F("Net::doSend: "));
     Serial.print(hdr & RF12_HDR_ACK ? " w/ACK " : " no-ACK ");
@@ -79,17 +104,21 @@ void Net::doSend(void) {
       sendTime = millis();
     }
   }
+#endif
 }
 
 // Send a new packet, this is what user code should call
 void Net::send(uint8_t len, bool ack) {
+#ifndef NET_NONE
 	//uint8_t hdr = RF12_HDR_DST | (ack ? RF12_HDR_ACK : 0) | NET_GW_NODE;
   uint8_t hdr = (ack ? RF12_HDR_ACK : 0) | node_id;
   rawSend(len, hdr);
+#endif
 }
 
 // raw form of send where full header gets passed-in, used by GW to forward from ethernet
 void Net::rawSend(uint8_t len, uint8_t hdr) {
+#ifndef NET_NONE
   if (bufCnt >= NET_PKT) return; // error?
   buf[bufCnt].len = len;
   buf[bufCnt].hdr = hdr;
@@ -98,10 +127,14 @@ void Net::rawSend(uint8_t len, uint8_t hdr) {
   if (bufCnt == 1 && rf12_canSend()) {
     doSend();
   }
+#endif
 }
+
+
 
 // Broadcast a new packet, this is what user code should call
 void Net::bcast(uint8_t len) {
+#ifndef NET_NONE
   if (bufCnt >= NET_PKT) return; // error?
   buf[bufCnt].len = len;
   buf[bufCnt].hdr = node_id;
@@ -110,14 +143,17 @@ void Net::bcast(uint8_t len) {
   if (bufCnt == 1 && rf12_canSend()) {
     doSend();
   }
+#endif
 }
 
 void Net::getRssi(void) {
+#ifndef NET_NONE
   // go and get the analog RSSI -- TODO: this needs to be configurable
 # ifdef RSSI_PIN
     lastRcvRssi = (uint8_t)((analogRead(RSSI_PIN)-300) >> 2);
 # else
     lastRcvRssi = 0;
+# endif
 # endif
 }
 
@@ -133,6 +169,7 @@ void Net::queueAck(byte dest_node) {
 
 // send a node announcement packet -- using during initialization
 void Net::announce(void) {
+#ifdef NET_RF12B
   if (rf12_canSend()) {
     struct { uint8_t module; uint16_t uuid; } pkt = { NET_MODULE, nodeUuid };
     rf12_sendStart(node_id, &pkt, sizeof(pkt));
@@ -141,12 +178,15 @@ void Net::announce(void) {
     if (initAt == 0) initAt = 1;
     Serial.println(F("Net: sending announcement"));
   }
+#elifdef NET_SERIAL
+#endif
 }
 
 // Poll the rf12 network and return true if a packet has been received
 // ACKs are processed automatically (and are expected not to have data,
 // but do include the RSSI to make for simple round-trip measurements)
 uint8_t Net::poll(void) {
+#ifndef NET_NONE
   bool rcv = rf12_recvDone();
   if (rcv && rf12_crc == 0) {
     //Serial.print("Got packet with HDR=0x");
@@ -177,10 +217,12 @@ uint8_t Net::poll(void) {
   }
 
   reXmit();
+#endif
   return 0;
 }
 
 void Net::reXmit(void) {
+#ifndef NET_NONE
   // If we need to resend the announcement, try to send it
   if (initAt != 0 && millis() >= initAt && node_id != NET_GW_NODE) {
     announce();
@@ -207,6 +249,7 @@ void Net::reXmit(void) {
     }
 
   }
+#endif
 }
 
 // Constructor
@@ -222,6 +265,7 @@ Net::Net(uint8_t group_id, bool lowPower) {
 // ===== Configuration =====
 
 void Net::receive(volatile uint8_t *pkt, uint8_t len) {
+#ifndef NET_NONE
   //Serial.println("Got initialization packet!");
   // handle initialization packet (response to announcement)
   // Format: module(8), uuid(16), node_id(8), enabled(8)
@@ -241,6 +285,7 @@ void Net::receive(volatile uint8_t *pkt, uint8_t len) {
       config_write(NET_MODULE, &eeprom);
     }
   }
+#endif
 }
 
 // ApplyConfig() not just processes the EEPROM config but also initializes the RF12 module
@@ -271,6 +316,11 @@ void Net::applyConfig(uint8_t *cf) {
 
 void Net::setNodeId(uint8_t id) {
   node_id = id;
+
+#ifdef NET_NONE
+	Serial.println(F("Config Net: RF12B disabled"));
+	return;
+#else
   // initialize rf12 module
   Serial.print(F("Config Net: node_id="));
   Serial.print(node_id);
@@ -296,5 +346,6 @@ void Net::setNodeId(uint8_t id) {
 #ifdef RSSI_PIN
   analogReference(INTERNAL);
   pinMode(RSSI_PIN, INPUT);
+#endif
 #endif
 }

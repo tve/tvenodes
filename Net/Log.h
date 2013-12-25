@@ -12,7 +12,7 @@
 #define LOG_MAX (RF12_MAXDATA-1)		// max amount of chars that can be logged in one packet
 
 class Log : public Print, public Configured {
-private:
+public:
   // Configuration structure stored in EEPROM
   typedef struct {
     bool	serial:1;	// log to serial port
@@ -22,12 +22,13 @@ private:
     bool	time:1;		// log the time with each packet
   } log_config;
 
-  log_config config;
+private:
+  log_config config, defaults;
   uint8_t buffer[LOG_MAX+1]; // +1 for null byte string termination
   uint8_t ix;
 
-	// send accumulated buffer
-  void send(void);
+  void send(void);  // send accumulated buffer
+	void init();
 
 protected:
 	// Log to the ethernet, the implementation here does nothing, this must be
@@ -36,8 +37,11 @@ protected:
   virtual void ethSend(uint8_t *buffer, uint8_t len);
 
 public:
-	// constructor
+	// constructor, uses default log initialization (serial + rf12b)
 	Log(void);
+
+	// constructor, explicit default log initialization (gets overridden by EEPROM)
+	Log(log_config defaults);
 
 	// write a character to the buffer, used by Print but can also be called explicitly
 	// automatically prints/sends the buffer when it's full or a \n is written

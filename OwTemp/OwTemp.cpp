@@ -7,7 +7,9 @@
 #define OWTEMP_CONVTIME 188 // milliseconds for a conversion (10 bits)
 #define TEMP_OFFSET      88 // offset used to store min/max in 8 bits
 
-#define DEBUG 1
+#define MAX_COUNT        16 // max number of sensors, limited due to bitfield ops
+
+#define DEBUG 0
 
 // ===== Constructors =====
 
@@ -24,7 +26,7 @@ OwTemp::OwTemp(byte pin, uint8_t count, uint64_t *addr) : ds(pin) {
 }
 
 void OwTemp::init(byte pin, uint8_t count) {
-  sensCount = count < 16 ? count : 16;
+  sensCount = count < MAX_COUNT ? count : MAX_COUNT;
   convState = 0;
   failed = 0;
   sensTemp = (float *)calloc(sensCount, sizeof(float));
@@ -33,7 +35,7 @@ void OwTemp::init(byte pin, uint8_t count) {
   sensMax  = (int8_t (*)[6])calloc(sensCount, 6*sizeof(int8_t));
   memset(sensMax, 0x80, sensCount*6*sizeof(int8_t));
   moduleId = OWTEMP_MODULE;
-  configSize = sizeof(uint64_t)*sensCount;
+  configSize = sizeof(uint32_t)*sensCount;
 #if DEBUG
 	Serial.print("OWT: count=");
 	Serial.print(sensCount);
@@ -71,7 +73,16 @@ uint8_t OwTemp::setup(Print *printer) {
 
     // see whether we know this sensor already
     for (byte s=0; s<sensCount; s++) {
-      if (addr == sensAddr[s]) {
+#if 0
+      printer->print("OWT: ");
+      printer->print((uint32_t)(addr&0xffffffff));
+      printer->print("=?=");
+      printer->print((uint32_t)(sensAddr[s]&0xffffffff));
+      printer->println();
+#endif
+      // we only restore 32 bits from EEPROM, so only compare that much...
+      if ((uint32_t)addr == (uint32_t)(sensAddr[s])) {
+        sensAddr[s] = addr;
 #       if DEBUG
         printer->print("OWT: found #");
         printAddr(printer, addr);
@@ -134,7 +145,11 @@ uint8_t OwTemp::setup(Print *printer) {
   printer->print(sensCount);
   printer->println(F(" sensors"));
 
-  config_write(OWTEMP_MODULE, sensAddr);
+  // save the config in EEPROM
+  uint32_t save[sensCount];
+  for (byte s=0; s<sensCount; s++)
+    save[s] = sensAddr[s]; // loose top 32 bits
+  config_write(OWTEMP_MODULE, save);
 
   // start a conversion
   lastConv = millis();
@@ -279,7 +294,7 @@ void OwTemp::printAddr(Print *printer, uint64_t addr) {
   uint8_t *a = (uint8_t *)&addr;
   printer->print("0x");
   // print only the top 3 bytes, the rest is always 31010000 (at least for me)
-  for (byte b=0; b<3; b++) {
+  for (byte b=0; b<8; b++) {
     printer->print(*a >> 4, HEX);
     printer->print(*a & 0xF, HEX);
     a++;
@@ -323,7 +338,11 @@ void OwTemp::applyConfig(uint8_t *cf) {
   if (cf) {
     if (sensAddr[0] == 0) {
       // address array is empty -> restore from EEPROM
-      memcpy(sensAddr, cf, sizeof(uint64_t)*sensCount);
+      for (byte i=0; i<sensCount; i++) {
+        // we store only the lower 32 bits in the EEPROM to save EEPROM space
+        sensAddr[i] = ((uint32_t*)cf)[i];
+      }
+      //memcpy(sensAddr, cf, sizeof(uint64_t)*sensCount);
 #     if DEBUG
       Serial.println(F("Config OwTemp: restored addrs from EEPROM"));
 #     endif
